@@ -1,0 +1,46 @@
+{
+  "name": "@agent-studio/bridge",
+  "version": "0.1.0",
+  "description": "Agent Studio Bridge CLI — run an executor on any machine (Cursor / Trae / Qoder / …)",
+  "type": "module",
+  "bin": {
+    "agent-studio-bridge": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');const p='dist/bin.js';fs.writeFileSync(p,'#!/usr/bin/env node\\n'+fs.readFileSync(p,'utf8').replace(/^#!.*\\n/,''))\"",
+    "dev": "tsx watch src/bin.ts start",
+    "start": "tsx src/bin.ts start",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/commit-record.test.js dist/http-auth.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@agent-studio/agent-runtime": "0.1.0",
+    "@inquirer/prompts": "^7.5.0",
+    "commander": "^13.1.0",
+    "fastify": "^5.2.1",
+    "gray-matter": "^4.0.3",
+    "socket.io-client": "^4.8.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

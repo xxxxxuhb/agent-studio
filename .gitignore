@@ -4,3 +4,10 @@ data/
 .env
 *.log
 .DS_Store
+*.tsbuildinfo
+apps/*/node_modules/
+apps/*/dist/
+apps/*/data/
+packages/*/node_modules/
+packages/*/dist/
+.bridge-data/
