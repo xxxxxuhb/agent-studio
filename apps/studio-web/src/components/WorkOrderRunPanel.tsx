@@ -93,6 +93,11 @@ function describeDifyAlert(
     };
   }
   if (dify.status === "paused" || order.status === "pending_approval") {
+    const recoverHint =
+      !dify.form_token &&
+      /form_token|Human Input|Web App/i.test(dify.raw_summary || "")
+        ? dify.raw_summary
+        : null;
     return {
       type: "warning",
       message: `Dify ${dify.status || "paused"}`,
@@ -100,7 +105,8 @@ function describeDifyAlert(
         ? "已开自动确认：Studio 将代为通过门禁"
         : dify.form_token
           ? "Human Input 可在下方 Studio 确认"
-          : "正在自动同步 form_token（也可手动点「同步 Dify」）；Human Input 须为 Web App 投递",
+          : recoverHint ||
+            "正在自动同步 form_token（也可手动点「同步 Dify」）；Human Input 须为 Web App 投递",
     };
   }
   return {
@@ -588,11 +594,19 @@ function ApprovalCard({
 
       {!dify?.form_token ? (
         <Alert
-          type="info"
+          type={
+            /失败|过期|Web App/i.test(dify?.raw_summary || "")
+              ? "warning"
+              : "info"
+          }
           showIcon
           style={{ marginBottom: 12 }}
           message="正在自动拉取门禁表单…"
-          description="Studio 会定时同步 Dify；拿到 form_token 后即可通过/驳回。也可手动点「同步 Dify」。"
+          description={
+            dify?.raw_summary?.trim()
+              ? dify.raw_summary
+              : "Studio 会定时同步 Dify；拿到 form_token 后即可通过/驳回。也可手动点「同步 Dify」。"
+          }
         />
       ) : null}
 

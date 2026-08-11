@@ -47,8 +47,12 @@ import { WorkOrderEntity } from "./entities/work-order.entity";
 import {
   type BridgeStageHint,
   type ProjectRouting,
+  defaultDifyUserForWorkOrder,
+  isHumanFormExpired,
+  isInvalidOrExpiredHumanFormError,
   isTransientDifyFailure,
   resolveStudioBridgeBase,
+  shouldClearFormTokenOnRemoteStatus,
 } from "./work-order-dify-utils";
 import {
   ensureWorkspaceViaBridge,
@@ -107,6 +111,8 @@ export class WorkOrdersService {
   private readonly logger = new Logger(WorkOrdersService.name);
   /** Prevent re-entrant auto-approve while decide→sync is in flight. */
   private readonly autoApproveInFlight = new Set<string>();
+  /** Serialize syncDify per work order (web poll + gateway poll). */
+  private readonly syncInFlight = new Map<string, Promise<WorkOrder>>();
   /** Dedupe agent form/body logs within process lifetime. */
   private readonly loggedBodies = new Set<string>();
 
@@ -1020,7 +1026,7 @@ export class WorkOrdersService {
     const language = this.studioConfig.languageForTeam(
       draft.team_id || previous.team_id || "",
     );
-    const user = `work-order:${draft.id}`;
+    const user = defaultDifyUserForWorkOrder(draft.id);
 
     const agentManifest = await Promise.all(
       pipeline.steps.map(async (s) => {
@@ -1271,12 +1277,7 @@ export class WorkOrdersService {
   }
 
   private isDifyRemoteTerminal(status: string): boolean {
-    return (
-      status === "succeeded" ||
-      status === "partial-succeeded" ||
-      status === "failed" ||
-      status === "stopped"
-    );
+    return shouldClearFormTokenOnRemoteStatus(status);
   }
 
   private async authForOrder(order: WorkOrder) {
@@ -1293,6 +1294,16 @@ export class WorkOrdersService {
   }
 
   async syncDify(id: string): Promise<WorkOrder> {
+    const existing = this.syncInFlight.get(id);
+    if (existing) return existing;
+    const pending = this.syncDifyUnlocked(id).finally(() => {
+      this.syncInFlight.delete(id);
+    });
+    this.syncInFlight.set(id, pending);
+    return pending;
+  }
+
+  private async syncDifyUnlocked(id: string): Promise<WorkOrder> {
     const order = await this.get(id);
     if (!order.run?.dify?.workflow_run_id) {
       throw new BadRequestException("该工单没有绑定 Dify run");
@@ -1366,8 +1377,19 @@ export class WorkOrdersService {
       total_steps: detail.total_steps,
       elapsed_time: detail.elapsed_time ?? null,
       last_synced_at: this.nowIso(),
+      // Preserve recovered token across running/paused flicker until terminal.
+      form_token: dify.form_token,
+      form_content: dify.form_content,
+      form_actions: dify.form_actions,
+      form_inputs: dify.form_inputs,
+      form_expiration_time: dify.form_expiration_time,
+      form_node_title: dify.form_node_title,
       raw_summary: `Dify status=${detail.status}; steps=${detail.total_steps ?? "-"}`,
     };
+
+    if (detail.status === "paused" && !order.run.dify.user?.trim()) {
+      order.run.dify.user = defaultDifyUserForWorkOrder(order.id);
+    }
 
     if (
       detail.status === "paused" &&
@@ -1385,20 +1407,63 @@ export class WorkOrdersService {
           order.run.dify.form_node_title =
             recovered.form_node_title || order.run.dify.form_node_title;
           order.run.dify.status = "paused";
+          order.run.dify.raw_summary = `已从 Dify events 恢复 form_token；status=paused`;
+          this.appendRunEvent(order, {
+            type: "info",
+            message: "已恢复 Human Input form_token",
+            dify_status: "paused",
+          });
+        } else {
+          const tip =
+            "Dify 已暂停但暂未拿到 form_token（可能未开 Web App 投递，或 events 未回放门禁）。将继续自动同步。";
+          order.run.dify.raw_summary = tip;
+          const dupRecover = (order.run.events || []).some(
+            (e) =>
+              e.type === "sync_error" &&
+              e.message.includes("暂未拿到 form_token"),
+          );
+          if (!dupRecover) {
+            this.appendRunEvent(order, {
+              type: "sync_error",
+              level: "warn",
+              message: tip,
+              dify_status: "paused",
+            });
+          }
         }
-      } catch {
-        /* keep polling without form */
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const tip = `恢复 form_token 失败：${msg}`;
+        order.run.dify.raw_summary = tip;
+        const dupFail = (order.run.events || []).some(
+          (e) =>
+            e.type === "sync_error" &&
+            e.message.startsWith("恢复 form_token 失败：") &&
+            e.message === tip,
+        );
+        if (!dupFail) {
+          this.appendRunEvent(order, {
+            type: "sync_error",
+            level: "warn",
+            message: tip,
+            dify_status: "paused",
+          });
+        }
       }
     }
 
-    if (detail.status === "paused" || order.run.dify.status === "paused") {
-      await this.enrichDifyForm(order);
-    } else if (detail.status !== "paused") {
+    if (shouldClearFormTokenOnRemoteStatus(detail.status)) {
       order.run.dify.form_token = null;
       order.run.dify.form_content = undefined;
       order.run.dify.form_actions = undefined;
       order.run.dify.form_inputs = undefined;
       order.run.dify.form_expiration_time = undefined;
+    } else if (
+      detail.status === "paused" ||
+      order.run.dify.status === "paused" ||
+      order.run.dify.form_token
+    ) {
+      await this.enrichDifyForm(order);
     }
 
     if (prevStatus !== detail.status) {
@@ -1651,14 +1716,42 @@ export class WorkOrdersService {
     if (!order.run?.dify?.form_token) {
       order = await this.syncDify(id);
     }
-    const dify = order.run?.dify;
+    let dify = order.run?.dify;
     if (!dify?.form_token) {
       throw new BadRequestException(
         "缺少 Dify form_token，无法在 Studio 确认。请先「同步 Dify」，并确认 Human Input 节点使用 Web App 投递。",
       );
     }
-    if (!dify.user) {
+    if (!dify.user?.trim()) {
+      dify.user = defaultDifyUserForWorkOrder(order.id);
+      order.run!.dify!.user = dify.user;
+      await this.write(order);
+      dify = order.run?.dify;
+    }
+    if (!dify?.user) {
       throw new BadRequestException("缺少 Dify user，无法提交 Human Input");
+    }
+    if (isHumanFormExpired(dify.form_expiration_time)) {
+      order.run!.dify!.form_token = null;
+      order.run!.dify!.form_content = undefined;
+      order.run!.dify!.raw_summary =
+        "本地 form_token 已过期，正在重新同步 Dify Human Input…";
+      await this.write(order);
+      order = await this.syncDify(id);
+      dify = order.run?.dify;
+      if (!dify?.form_token) {
+        throw new BadRequestException(
+          "Human Input 表单已过期且未能重新获取 form_token，请点「同步 Dify」后重试",
+        );
+      }
+    }
+
+    const formToken = (dify.form_token || "").trim();
+    const difyUser = (dify.user || "").trim();
+    if (!formToken || !difyUser) {
+      throw new BadRequestException(
+        "缺少 Dify form_token 或 user，无法提交 Human Input",
+      );
     }
 
     const action = this.resolveDifyAction(dify.form_actions || [], body);
@@ -1676,13 +1769,51 @@ export class WorkOrdersService {
     });
     await this.write(order);
 
-    await this.difyClient.submitHumanInputForm({
-      formToken: dify.form_token,
-      action,
-      user: dify.user,
-      inputs,
-      auth: await this.authForOrder(order),
-    });
+    const auth = await this.authForOrder(order);
+    try {
+      await this.difyClient.submitHumanInputForm({
+        formToken,
+        action,
+        user: difyUser,
+        inputs,
+        auth,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!isInvalidOrExpiredHumanFormError(msg)) throw err;
+      // Drop stale token, recover once, retry submit once.
+      order = await this.get(id);
+      if (order.run?.dify) {
+        order.run.dify.form_token = null;
+        order.run.dify.form_content = undefined;
+        order.run.dify.form_actions = undefined;
+        order.run.dify.form_inputs = undefined;
+        order.run.dify.raw_summary = `提交失败（token 失效）：${msg}；正在重试恢复…`;
+        this.appendRunEvent(order, {
+          type: "sync_error",
+          level: "warn",
+          message: `Human Input 提交失败，尝试重新获取 form_token：${msg}`,
+          dify_status: order.run.dify.status,
+        });
+        await this.write(order);
+      }
+      order = await this.syncDify(id);
+      dify = order.run?.dify;
+      const retryToken = (dify?.form_token || "").trim();
+      const retryUser = (dify?.user || "").trim();
+      if (!retryToken || !retryUser) {
+        throw new BadRequestException(
+          `Human Input 提交失败且无法恢复 form_token：${msg}`,
+        );
+      }
+      await this.difyClient.submitHumanInputForm({
+        formToken: retryToken,
+        action,
+        user: retryUser,
+        inputs,
+        auth: await this.authForOrder(order),
+      });
+    }
 
     order = await this.get(id);
     if (order.run?.dify) {
@@ -1783,6 +1914,21 @@ export class WorkOrdersService {
   private async enrichDifyForm(order: WorkOrder) {
     const dify = order.run?.dify;
     if (!dify?.form_token) return;
+    if (isHumanFormExpired(dify.form_expiration_time)) {
+      dify.form_token = null;
+      dify.form_content = undefined;
+      dify.form_actions = undefined;
+      dify.form_inputs = undefined;
+      dify.form_expiration_time = undefined;
+      dify.raw_summary = `${dify.raw_summary || ""}\n本地 form_token 已过期，将在下次同步时重新恢复`.trim();
+      this.appendRunEvent(order, {
+        type: "sync_error",
+        level: "warn",
+        message: "Human Input form_token 已过期，已清除并将重新恢复",
+        dify_status: dify.status,
+      });
+      return;
+    }
     try {
       const form = await this.difyClient.getHumanInputForm(
         dify.form_token,
@@ -1801,8 +1947,29 @@ export class WorkOrdersService {
           output_variable_name: f.output_variable_name,
         }));
       dify.form_expiration_time = form.expiration_time ?? null;
+      if (isHumanFormExpired(dify.form_expiration_time)) {
+        dify.form_token = null;
+        dify.form_content = undefined;
+        dify.form_actions = undefined;
+        dify.form_inputs = undefined;
+        dify.raw_summary = `${dify.raw_summary || ""}\n远端表单已过期`.trim();
+      }
     } catch (err) {
-      dify.raw_summary = `${dify.raw_summary || ""}\n获取表单失败: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = err instanceof Error ? err.message : String(err);
+      dify.raw_summary = `${dify.raw_summary || ""}\n获取表单失败: ${msg}`.trim();
+      if (isInvalidOrExpiredHumanFormError(msg)) {
+        dify.form_token = null;
+        dify.form_content = undefined;
+        dify.form_actions = undefined;
+        dify.form_inputs = undefined;
+        dify.form_expiration_time = undefined;
+        this.appendRunEvent(order, {
+          type: "sync_error",
+          level: "warn",
+          message: `Human Input 表单不可用，已清除 token：${msg}`,
+          dify_status: dify.status,
+        });
+      }
     }
   }
 

@@ -26,7 +26,7 @@ Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远
 
 ### 工单可靠性
 
-- [ ] Dify Human Input / `form_token` 丢失与恢复路径加固。
+- [x] Dify Human Input / `form_token` 丢失与恢复路径加固（不误清 token、恢复失败可观测、过期重拉、decide 重试、sync 串行）。
 - [ ] Bridge 掉线 / `busy` / 阶段失败后的重试与可恢复状态机。
 - [ ] Studio run_id ↔ Dify ↔ Bridge stage 统一可检索（失败原因、日志串联）。
 

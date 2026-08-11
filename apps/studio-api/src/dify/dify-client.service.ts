@@ -68,6 +68,11 @@ type ConsumeOpts = {
   softTimeoutMs?: number;
   /** Hard cap for the whole SSE wait (ms). */
   hardTimeoutMs?: number;
+  /**
+   * When recovering a known pause, keep reading until form_token or hard timeout
+   * (ignore soft timeout if token still missing).
+   */
+  waitForFormToken?: boolean;
 };
 
 @Injectable()
@@ -285,7 +290,8 @@ export class DifyClientService {
   }
 
   /**
-   * Re-open event stream briefly to recover form_token after a pause.
+   * Re-open event stream to recover form_token after a pause.
+   * Longer wait than startWorkflow — recover only runs when getRun already says paused.
    */
   async recoverPauseInfo(opts: {
     workflowRunId: string;
@@ -307,9 +313,13 @@ export class DifyClientService {
       res,
       {
         workflow_run_id: opts.workflowRunId,
-        status: "running",
+        status: "paused",
       },
-      { softTimeoutMs: 5_000, hardTimeoutMs: 12_000 },
+      {
+        softTimeoutMs: 15_000,
+        hardTimeoutMs: 30_000,
+        waitForFormToken: true,
+      },
     );
   }
 
@@ -374,13 +384,22 @@ export class DifyClientService {
     while (true) {
       const elapsed = Date.now() - startedAt;
       if (elapsed >= hardTimeoutMs) return finishEarly();
-      if (runIdAt && Date.now() - runIdAt >= softTimeoutMs) return finishEarly();
+      const softDue = Boolean(runIdAt && Date.now() - runIdAt >= softTimeoutMs);
+      if (softDue) {
+        if (!(opts.waitForFormToken && !result.form_token)) {
+          return finishEarly();
+        }
+      }
 
       const waitBudget = Math.max(
         200,
         Math.min(
           hardTimeoutMs - elapsed,
-          runIdAt ? softTimeoutMs - (Date.now() - runIdAt) : hardTimeoutMs - elapsed,
+          softDue && opts.waitForFormToken && !result.form_token
+            ? hardTimeoutMs - elapsed
+            : runIdAt
+              ? softTimeoutMs - (Date.now() - runIdAt)
+              : hardTimeoutMs - elapsed,
         ),
       );
 

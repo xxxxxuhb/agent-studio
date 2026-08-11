@@ -129,7 +129,15 @@ export function WorkOrdersPage() {
     if (!waiting) return;
 
     let cancelled = false;
+    let attempt = 0;
+    let timer: number | undefined;
+
+    const schedule = (delayMs: number) => {
+      timer = window.setTimeout(() => void tick(), delayMs);
+    };
+
     const tick = async () => {
+      attempt += 1;
       try {
         const updated = await workOrdersApi.syncDify(selected.id);
         if (cancelled) return;
@@ -140,15 +148,20 @@ export function WorkOrdersPage() {
           next[idx] = updated;
           return next;
         });
+        if (updated.run?.dify?.form_token) return;
       } catch {
         /* silent — manual sync button still available */
       }
+      if (cancelled) return;
+      // Back off so we don't hammer Dify alongside the 5s gateway poll.
+      const delay = Math.min(15_000, 4_000 + attempt * 2_000);
+      schedule(delay);
     };
+
     void tick();
-    const timer = window.setInterval(() => void tick(), 4000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer) window.clearTimeout(timer);
     };
   }, [
     selected?.id,

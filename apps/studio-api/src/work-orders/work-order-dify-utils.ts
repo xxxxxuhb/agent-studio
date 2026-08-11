@@ -74,6 +74,61 @@ export function isTransientDifyFailure(message: string): boolean {
   );
 }
 
+/** Dify run statuses that mean Human Input / form is no longer needed. */
+export function isDifyRemoteTerminal(status: string): boolean {
+  return (
+    status === "succeeded" ||
+    status === "partial-succeeded" ||
+    status === "failed" ||
+    status === "stopped"
+  );
+}
+
+/** Stable App API `user` used when starting a work-order workflow. */
+export function defaultDifyUserForWorkOrder(workOrderId: string): string {
+  return `work-order:${(workOrderId || "").trim()}`;
+}
+
+/**
+ * Dify may return Unix seconds or milliseconds for form expiration.
+ * Missing/invalid → not expired (caller still validates via GET form).
+ */
+export function isHumanFormExpired(
+  expirationTime: number | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  if (expirationTime == null || !Number.isFinite(expirationTime)) return false;
+  const ms =
+    expirationTime > 1_000_000_000_000
+      ? expirationTime
+      : expirationTime * 1000;
+  return ms <= nowMs;
+}
+
+/** GET/POST human form failures that mean the local token should be dropped. */
+export function isInvalidOrExpiredHumanFormError(message: string): boolean {
+  const m = (message || "").toLowerCase();
+  if (!m) return false;
+  if (/\b(404|401|403|410)\b/.test(m)) return true;
+  return (
+    m.includes("not found") ||
+    m.includes("expired") ||
+    m.includes("invalid form") ||
+    m.includes("form token") ||
+    m.includes("human form") ||
+    m.includes("unauthorized") ||
+    m.includes("forbidden")
+  );
+}
+
+/**
+ * Keep a recovered form_token across `running` flicker; clear only when remote
+ * is terminal (or caller clears after successful submit).
+ */
+export function shouldClearFormTokenOnRemoteStatus(status: string): boolean {
+  return isDifyRemoteTerminal(status);
+}
+
 export type BridgeStageHint = {
   runId?: string;
   stage?: string;
