@@ -62,6 +62,8 @@ export class BridgesGateway
       platform?: string;
       available_drivers?: string[];
       id?: string;
+      status?: "online" | "offline" | "busy";
+      current_run_id?: string;
     },
   ) {
     try {
@@ -76,6 +78,8 @@ export class BridgesGateway
         platform: body?.platform,
         available_drivers: body?.available_drivers,
         id: body?.id,
+        status: body?.status,
+        current_run_id: body?.current_run_id,
       });
       (client.data as BridgeSocketData).bridgeId = bridge.id;
       client.join(`bridge:${bridge.id}`);

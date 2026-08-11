@@ -40,6 +40,8 @@ export const BridgeRegisterSchema = z.object({
   available_drivers: z.array(z.string()).optional().default([]),
   id: z.string().optional(),
   status: BridgeStatusSchema.optional().default("online"),
+  /** Preserve busy across WS reconnect when mid-run. */
+  current_run_id: z.string().optional().default(""),
 });
 export type BridgeRegister = z.infer<typeof BridgeRegisterSchema>;
 

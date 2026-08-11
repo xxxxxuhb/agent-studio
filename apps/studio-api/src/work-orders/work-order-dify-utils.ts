@@ -48,6 +48,42 @@ export function resolveStudioBridgeBase(opts: {
   return studioReachableBridgeBase(raw);
 }
 
+/**
+ * URL passed into Dify workflow inputs (often runs inside Docker).
+ * Loopback registered URLs become host.docker.internal so Dify can reach Bridge.
+ */
+export function difyFacingBridgeBase(url: string | undefined): string {
+  const base =
+    (url || "").trim().replace(/\/$/, "") ||
+    "http://host.docker.internal:8787";
+  try {
+    const parsed = new URL(base);
+    if (/^(127\.0\.0\.1|localhost)$/i.test(parsed.hostname)) {
+      parsed.hostname = "host.docker.internal";
+      return parsed.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return base
+      .replace(/127\.0\.0\.1/gi, "host.docker.internal")
+      .replace(/localhost/gi, "host.docker.internal");
+  }
+  return base;
+}
+
+/** Same preference order as Studio routing, but rewritten for Dify-in-Docker. */
+export function resolveDifyBridgeBase(opts: {
+  override?: string;
+  registeredBaseUrl?: string;
+  configured?: string;
+}): string {
+  const raw =
+    (opts.override || "").trim() ||
+    (opts.registeredBaseUrl || "").trim() ||
+    (opts.configured || "").trim() ||
+    "http://host.docker.internal:8787";
+  return difyFacingBridgeBase(raw);
+}
+
 /** 5xx / network / timeout — keep work order running and ask user to retry sync. */
 export function isTransientDifyFailure(message: string): boolean {
   const m = (message || "").toLowerCase();

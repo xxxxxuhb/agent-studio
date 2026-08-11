@@ -56,24 +56,17 @@ function describeDifyAlert(
   dify: NonNullable<NonNullable<WorkOrder["run"]>["dify"]>,
 ): DifyAlertInfo {
   const err = (dify.error || "").trim();
+  const summary = (dify.raw_summary || "").trim();
   const softHeld = order.status === "running" && Boolean(err);
   const syncFailed =
     softHeld &&
     (err.startsWith("同步失败:") ||
-      /拉取 Dify 状态失败|get run failed|Dify get run/i.test(
-        dify.raw_summary || err,
-      ));
-  const workflowSoftFailed = softHeld && dify.status === "failed" && !syncFailed;
+      /拉取 Dify 状态失败|get run failed|Dify get run/i.test(summary || err));
+  const transientBridge =
+    /\b(502|503|504)\b|bridge_busy|econnrefused|fetch failed|不可达|掉线|瞬时/i.test(
+      `${err}\n${summary}`,
+    );
 
-  if (workflowSoftFailed) {
-    return {
-      type: "warning",
-      message: "Dify 工作流已失败（下游瞬时错误）",
-      hint:
-        "常见原因：Bridge 未启动或返回 503。本次 run 已结束，修好 Bridge 后点「重新执行」。",
-      offerRestart: true,
-    };
-  }
   if (syncFailed) {
     return {
       type: "warning",
@@ -84,11 +77,15 @@ function describeDifyAlert(
   }
   if (dify.status === "failed" || order.status === "failed") {
     return {
-      type: "error",
-      message: "Dify 工作流失败",
-      hint: err
-        ? "本次运行已结束。修好问题后点「重新执行」。"
-        : "本次运行已结束。请查看 Dify 日志后点「重新执行」。",
+      type: transientBridge ? "warning" : "error",
+      message: transientBridge
+        ? "Dify 工作流失败（疑似 Bridge/网络瞬时）"
+        : "Dify 工作流失败",
+      hint: transientBridge
+        ? "常见原因：Bridge 未启动、掉线或返回 503。本次 run 已结束，修好后点「重新执行」（可复用选仓）。"
+        : err
+          ? "本次运行已结束。修好问题后点「重新执行」。"
+          : "本次运行已结束。请查看 Dify 日志后点「重新执行」。",
       offerRestart: true,
     };
   }

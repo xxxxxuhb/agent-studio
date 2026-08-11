@@ -140,6 +140,14 @@ export class BridgesService implements OnModuleInit {
   async pickRegisteredBaseUrl(opts?: {
     teamId?: string;
   }): Promise<string | undefined> {
+    const preferred = await this.pickRegisteredExecutor(opts);
+    return preferred?.base_url?.replace(/\/$/, "") || undefined;
+  }
+
+  /** Online/busy executor for a team (busy still counts as reachable mid-run). */
+  async pickRegisteredExecutor(opts?: {
+    teamId?: string;
+  }): Promise<BridgeExecutor | undefined> {
     const teamId = (opts?.teamId || "").trim();
     const candidates = (await this.list()).filter((b) => {
       if (b.status !== "online" && b.status !== "busy") return false;
@@ -149,11 +157,57 @@ export class BridgesService implements OnModuleInit {
       }
       return true;
     });
-    const preferred = teamId
+    return teamId
       ? candidates.find((b) => (b.team_id || "").trim() === teamId) ||
-        candidates[0]
+          candidates[0]
       : candidates[0];
-    return preferred?.base_url?.replace(/\/$/, "") || undefined;
+  }
+
+  /**
+   * Fail fast before workspace ensure / Dify start when Bridge looks unreachable.
+   */
+  async requireReachableBaseUrl(opts?: {
+    teamId?: string;
+    override?: string;
+    configured?: string;
+  }): Promise<{ studioBaseUrl: string; registeredBaseUrl?: string }> {
+    const override = (opts?.override || "").trim().replace(/\/$/, "");
+    const registered = await this.pickRegisteredBaseUrl({
+      teamId: opts?.teamId,
+    });
+    const configured = (opts?.configured || "").trim().replace(/\/$/, "");
+    const studioBaseUrl = override || registered || configured;
+    if (!studioBaseUrl) {
+      throw new BadRequestException(
+        "无可用 Bridge：请启动执行器并完成 WS 注册，或在团队设置填写 bridge_base_url",
+      );
+    }
+    if (!override && !registered && configured) {
+      // Settings-only fallback — probe health so we fail before Dify starts.
+      const ok = await this.probeBridgeHealth(studioBaseUrl);
+      if (!ok) {
+        throw new BadRequestException(
+          `Bridge 不可达（${studioBaseUrl}/health）。请启动 Bridge 或确认已注册在线执行器`,
+        );
+      }
+    }
+    return {
+      studioBaseUrl,
+      registeredBaseUrl: registered,
+    };
+  }
+
+  async probeBridgeHealth(baseUrl: string): Promise<boolean> {
+    const base = baseUrl.replace(/\/$/, "");
+    try {
+      const res = await fetch(`${base}/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(3_000),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   async listForUser(
@@ -219,6 +273,15 @@ export class BridgesService implements OnModuleInit {
     this.assertToken(body.token);
     const id = body.id?.trim() || this.idFromName(body.name, body.base_url);
     const existing = await this.repo.findOne({ where: { id } });
+    const incomingRun = (body.current_run_id || "").trim();
+    const preservedRun =
+      incomingRun ||
+      (existing?.status === "busy" || existing?.status === "online"
+        ? (existing?.current_run_id || "").trim()
+        : "");
+    const status =
+      body.status ||
+      (preservedRun ? "busy" : "online");
     return this.write({
       id,
       team_id: existing?.team_id || "",
@@ -230,8 +293,8 @@ export class BridgesService implements OnModuleInit {
       model: body.model || "",
       platform: body.platform || "",
       available_drivers: body.available_drivers || [],
-      status: body.status || "online",
-      current_run_id: "",
+      status,
+      current_run_id: preservedRun,
       last_seen_at: this.nowIso(),
       created_at: existing?.created_at?.toISOString?.(),
       note: existing?.note || "",
@@ -250,10 +313,13 @@ export class BridgesService implements OnModuleInit {
     platform?: string;
     available_drivers?: string[];
     id?: string;
+    status?: BridgeStatus;
+    current_run_id?: string;
   }): Promise<BridgeExecutor> {
     return this.register({
       ...input,
-      status: "online",
+      status: input.status || (input.current_run_id ? "busy" : "online"),
+      current_run_id: input.current_run_id || "",
     });
   }
 

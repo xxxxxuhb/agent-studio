@@ -55,6 +55,15 @@ export type BridgeServerInfo = {
 let studioLink: StudioLink | undefined;
 let activeRuns = 0;
 
+/** Test-only: force admit-control state without a long-running stage. */
+export function __testSetActiveRuns(n: number) {
+  activeRuns = Math.max(0, Math.floor(n));
+}
+
+export function __testGetActiveRuns() {
+  return activeRuns;
+}
+
 function applyDriverEnv(driver?: string) {
   if (!driver?.trim()) return;
   process.env.AGENT_DRIVER = driver.trim().toLowerCase();
@@ -199,6 +208,13 @@ export function createBridgeApp() {
   });
 
   app.post("/runs", async (req, reply) => {
+    if (activeRuns > 0) {
+      return reply.code(503).send({
+        error: "bridge_busy",
+        message: "Bridge is busy with another run; retry later or use「重新执行」after it finishes",
+        activeRuns,
+      });
+    }
     const body = z
       .object({
         agents_md_path: z.string().optional().default("auto"),

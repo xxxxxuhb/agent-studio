@@ -48,6 +48,8 @@ export function connectStudioLink(opts: StudioLinkOptions): Promise<StudioLink> 
       platform: process.platform,
       available_drivers: listAgentDriverIds(),
       id: bridgeId || undefined,
+      status: currentRunId ? ("busy" as const) : ("online" as const),
+      current_run_id: currentRunId || "",
     });
 
     const fail = (err: Error) => {
@@ -65,6 +67,17 @@ export function connectStudioLink(opts: StudioLinkOptions): Promise<StudioLink> 
         }
         bridgeId = res.bridge.id;
         console.log(`WS linked to Studio as ${bridgeId} (driver=${driver.id})`);
+        // Re-assert busy immediately after reconnect so Studio does not think we are idle.
+        if (currentRunId) {
+          socket.emit("bridge_status", {
+            status: "busy",
+            current_run_id: currentRunId,
+            driver: describeActiveDriver().id,
+            driver_label: describeActiveDriver().label,
+            dry_run: describeActiveDriver().dryRun,
+            base_url: opts.publicUrl,
+          });
+        }
         if (!settled) {
           settled = true;
           resolve({

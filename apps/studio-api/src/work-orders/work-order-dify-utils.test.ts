@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   defaultDifyUserForWorkOrder,
+  difyFacingBridgeBase,
   isDifyRemoteTerminal,
   isHumanFormExpired,
   isInvalidOrExpiredHumanFormError,
+  isTransientDifyFailure,
+  resolveDifyBridgeBase,
   shouldClearFormTokenOnRemoteStatus,
 } from "./work-order-dify-utils.js";
 
@@ -43,6 +46,26 @@ describe("human form / form_token helpers", () => {
     assert.equal(
       isInvalidOrExpiredHumanFormError("Dify get run failed (network): timeout"),
       false,
+    );
+  });
+
+  it("detects transient bridge/network failures", () => {
+    assert.equal(isTransientDifyFailure("HTTP 503"), true);
+    assert.equal(isTransientDifyFailure("fetch failed"), true);
+    assert.equal(isTransientDifyFailure("validation error"), false);
+  });
+
+  it("rewrites loopback for Dify-facing Bridge URL", () => {
+    assert.equal(
+      difyFacingBridgeBase("http://127.0.0.1:8787"),
+      "http://host.docker.internal:8787",
+    );
+    assert.equal(
+      resolveDifyBridgeBase({
+        registeredBaseUrl: "http://127.0.0.1:8787",
+        configured: "http://host.docker.internal:9999",
+      }),
+      "http://host.docker.internal:8787",
     );
   });
 });

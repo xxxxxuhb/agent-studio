@@ -51,6 +51,7 @@ import {
   isHumanFormExpired,
   isInvalidOrExpiredHumanFormError,
   isTransientDifyFailure,
+  resolveDifyBridgeBase,
   resolveStudioBridgeBase,
   shouldClearFormTokenOnRemoteStatus,
 } from "./work-order-dify-utils";
@@ -862,17 +863,29 @@ export class WorkOrdersService {
     // Validates global enabled + pipeline/global App Key
     this.difyConfig.resolveAuthForPipeline(pipeline);
 
+    const cfg = this.difyConfig.getEffectiveForTeam(order.team_id || "");
+    const bridgePick = await this.bridges.requireReachableBaseUrl({
+      teamId: order.team_id,
+      override: body.bridge_base_url,
+      configured: cfg.bridge_base_url,
+    });
+    const difyBridgeBase = resolveDifyBridgeBase({
+      override: body.bridge_base_url,
+      registeredBaseUrl: bridgePick.registeredBaseUrl,
+      configured: cfg.bridge_base_url,
+    });
+
     let routing: ProjectRouting | null = null;
     if (body.reuse_previous_routing) {
       routing = await this.tryReusePreviousRouting(order, {
         agentsMdPath: body.agents_md_path,
-        bridgeBaseUrl: body.bridge_base_url,
+        bridgeBaseUrl: body.bridge_base_url || bridgePick.studioBaseUrl,
       });
     }
     if (!routing) {
       routing = await this.prepareProjectRouting(order, {
         agentsMdPath: body.agents_md_path,
-        bridgeBaseUrl: body.bridge_base_url,
+        bridgeBaseUrl: body.bridge_base_url || bridgePick.studioBaseUrl,
       });
     }
 
@@ -948,7 +961,7 @@ export class WorkOrdersService {
     return this.startDifyFromDraft(order, next, {
       agents_md_path: routing.agents_md_path,
       routing_mode: routing.routing_mode,
-      bridge_base_url: body.bridge_base_url,
+      bridge_base_url: difyBridgeBase,
     });
   }
 
@@ -1061,7 +1074,13 @@ export class WorkOrdersService {
       (agentsMd && agentsMd !== "auto" ? "explicit" : "auto");
 
     const inputs = {
-      bridge_base_url: opts.bridge_base_url || cfg.bridge_base_url,
+      bridge_base_url: resolveDifyBridgeBase({
+        override: opts.bridge_base_url,
+        registeredBaseUrl: await this.bridges.pickRegisteredBaseUrl({
+          teamId: draft.team_id || previous.team_id || "",
+        }),
+        configured: cfg.bridge_base_url,
+      }),
       bridge_token: bridgeHttpToken(),
       agents_md_path: agentsMd,
       routing_mode: routingMode,
@@ -1517,7 +1536,7 @@ export class WorkOrdersService {
       isTransientDifyFailure(detail.error || "");
 
     this.applyDifyStatusToOrder(order, detail.status, {
-      // Soft-hold only for true transport flakes; a finished failed run stays failed.
+      // Transient Bridge/network failures still end this run; mark retryable in summary.
       softFailed: false,
     });
 
@@ -1526,12 +1545,19 @@ export class WorkOrdersService {
     }
 
     if (softFailed && order.run.dify) {
-      // Keep diagnostic hint, but do not pretend the run is still executing.
       order.run.dify.raw_summary = [
-        "Dify 工作流已失败（下游瞬时错误，常见于 Bridge 503/不可达）。",
-        "请确认 Bridge 可用后点「重新执行」。",
+        "Dify 工作流已失败（下游瞬时错误，常见于 Bridge 掉线/503/不可达）。",
+        "本次 run 已结束；确认 Bridge 在线后点「重新执行」。",
         detail.error || "unknown error",
       ].join(" ");
+    } else if (detail.status === "failed" && order.run.dify && !softFailed) {
+      order.run.dify.raw_summary = [
+        order.run.dify.raw_summary || "",
+        detail.error ? `失败原因: ${detail.error}` : "",
+        "修好问题后可点「重新执行」。",
+      ]
+        .filter(Boolean)
+        .join(" ");
     }
 
     this.mirrorDifySteps(order, {
@@ -1569,9 +1595,12 @@ export class WorkOrdersService {
       }
       this.appendRunEvent(order, {
         type: "run_finished",
-        level: "error",
-        message: `运行结束：${order.status}${detail.error ? ` · ${detail.error}` : ""}`,
+        level: softFailed ? "warn" : "error",
+        message: softFailed
+          ? `运行结束（可重新执行）：Bridge/网络瞬时失败${detail.error ? ` · ${detail.error}` : ""}`
+          : `运行结束：${order.status}${detail.error ? ` · ${detail.error}` : ""}`,
         dify_status: detail.status,
+        detail: softFailed ? { retryable: true } : undefined,
       });
     }
 
@@ -2282,12 +2311,17 @@ export class WorkOrdersService {
     if (prepared.done) return await this.write(prepared.order);
 
     const saved = await this.write(prepared.order);
+    const cfg = this.difyConfig.getEffectiveForTeam(saved.team_id || "");
+    const registered = await this.bridges.pickRegisteredBaseUrl({
+      teamId: saved.team_id,
+    });
     return this.startDifyFromDraft(saved, saved, {
       agents_md_path: saved.run?.selected_agents_md_path,
       routing_mode: "explicit",
-      bridge_base_url: this.difyConfig.getEffectiveForTeam(
-        saved.team_id || "",
-      ).bridge_base_url,
+      bridge_base_url: resolveDifyBridgeBase({
+        registeredBaseUrl: registered,
+        configured: cfg.bridge_base_url,
+      }),
     });
   }
 
