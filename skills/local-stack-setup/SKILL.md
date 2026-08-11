@@ -194,7 +194,7 @@ BRIDGE_HTTP_TOKEN=dev-bridge-token
 
 **Bridge** — GitLab bot + MR (when needed): see [env-templates.md](env-templates.md).
 
-Never commit real `.env` or `data/dify-secrets.yaml`.
+Never commit real `.env`, `data/dify-secrets.yaml`, or `data/team-secrets/*.yaml`.
 
 ### 6. Bot SSH + PAT (optional but recommended for push/MR)
 
@@ -249,8 +249,8 @@ Confirm only **one** process owns `:8787` and `:8790`.
 |------|---------|
 | users / teams / members / projects / work_orders / run_logs | **MySQL** |
 | pipelines / digital humans / bridges | **MySQL** (`digital_humans` / `pipelines` / `bridges`) |
-| team-settings / Dify secrets / chats | YAML/files under `apps/studio-api/data/` |
-| leftover YAML under `data/{agents,pipelines,bridges,...}` | one-shot import only (source kept) |
+| team-settings / team-secrets / Dify secrets / chats | YAML/files under `apps/studio-api/data/` |
+| leftover YAML under `data/{agents,pipelines,bridges,...}` | one-shot import only (source kept; safe to archive after migrate) |
 | work-order git workspace + AGENTS.md | **Bridge host** `BRIDGE_REPOS_DIR` (default `~/AgentStudio`) via `POST /workspace/ensure` |
 
 ## Remote Bridge (split host)

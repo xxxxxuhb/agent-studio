@@ -89,18 +89,20 @@ export class PipelinesController {
     const overwrite = Boolean(body?.overwrite);
     const existingAppId = pipeline.dify?.app_id?.trim() || "";
 
+    const teamId = (pipeline.team_id || "").trim() || undefined;
     const imported = await this.difyClient.importDsl({
       yaml,
       name: pipeline.name,
       description: pipeline.description || undefined,
       app_id: overwrite && existingAppId ? existingAppId : undefined,
+      team_id: teamId,
     });
 
     const appId = imported.app_id || existingAppId;
     let published: { ok: boolean; version?: string } | null = null;
     if (appId) {
       // App API 只跑已发布版本；导入仅改草稿，必须发布否则仍是旧图。
-      published = await this.difyClient.publishWorkflow(appId);
+      published = await this.difyClient.publishWorkflow(appId, { team_id: teamId });
     }
 
     let pipelinePublic = await this.pipelines.getPublicForUser(user.id, id);

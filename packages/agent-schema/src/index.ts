@@ -334,7 +334,7 @@ export const WorkOrderRunSchema = z.object({
         )
         .optional(),
       /** Which credentials were used for this run */
-      binding_source: z.enum(["pipeline", "global"]).optional(),
+      binding_source: z.enum(["pipeline", "team", "global"]).optional(),
       api_base: z.string().optional(),
       api_key_set: z.boolean().optional(),
       app_id: z.string().optional(),
@@ -478,11 +478,17 @@ export type ManagerChatPost = z.infer<typeof ManagerChatPostSchema>;
 export {
   DifyConfigSchema,
   DifyConfigPublicSchema,
+  DifyConfigPublicForTeamSchema,
+  TeamSecretsSchema,
+  TeamSecretsPublicSchema,
   PipelineDifyBindingSchema,
   PipelineDifyBindingPublicSchema,
   DigitalHumanDifyBindingSchema,
   type DifyConfig,
   type DifyConfigPublic,
+  type DifyConfigPublicForTeam,
+  type TeamSecrets,
+  type TeamSecretsPublic,
   type PipelineDifyBinding,
   type PipelineDifyBindingPublic,
   type DigitalHumanDifyBinding,

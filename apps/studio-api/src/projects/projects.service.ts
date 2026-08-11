@@ -27,6 +27,7 @@ import {
 } from "./git-remote";
 import { ProjectEntity } from "./entities/project.entity";
 import { TeamsService } from "../teams/teams.service";
+import { DifyConfigService } from "../dify/dify-config.service";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +49,7 @@ export class ProjectsService implements OnModuleInit {
     @InjectRepository(ProjectEntity)
     private readonly repo: Repository<ProjectEntity>,
     private readonly teams: TeamsService,
+    private readonly difyConfig: DifyConfigService,
   ) {}
 
   onModuleInit() {
@@ -288,6 +290,18 @@ export class ProjectsService implements OnModuleInit {
     const cloneRoot = this.resolveCloneRoot(project);
     fs.mkdirSync(cloneRoot, { recursive: true });
 
+    const gitOverrides = (() => {
+      const tid = (project.team_id || "").trim();
+      if (!tid) return undefined;
+      const t = this.difyConfig.getTeamSecrets(tid);
+      return {
+        git_ssh_key_path: t.git_ssh_key_path || undefined,
+        git_prefer_ssh: t.git_prefer_ssh,
+        git_ssh_port: t.git_ssh_port,
+        git_ssh_user: t.git_ssh_user || undefined,
+      };
+    })();
+
     const targets = repoIds?.length
       ? project.repos.filter((r) => repoIds.includes(r.id))
       : project.repos;
@@ -299,7 +313,7 @@ export class ProjectsService implements OnModuleInit {
       try {
         if (fs.existsSync(local)) {
           if (fs.existsSync(path.join(local, ".git"))) {
-            ensureLocalOriginSsh(local);
+            ensureLocalOriginSsh(local, gitOverrides);
             this.ensureAgentsMdForLocal(project, repo, local);
             project.repos[idx] = {
               ...project.repos[idx],
@@ -317,8 +331,8 @@ export class ProjectsService implements OnModuleInit {
 
         fs.mkdirSync(path.dirname(local), { recursive: true });
         const branch = repo.default_branch || "main";
-        const cloneUrl = resolveCloneRemoteUrl(repo.remote_url);
-        const gitEnv = studioGitEnv();
+        const cloneUrl = resolveCloneRemoteUrl(repo.remote_url, gitOverrides);
+        const gitEnv = studioGitEnv(gitOverrides);
         await execFileAsync(
           "git",
           ["clone", "--branch", branch, "--single-branch", cloneUrl, local],
@@ -335,7 +349,7 @@ export class ProjectsService implements OnModuleInit {
           throw err;
         });
 
-        ensureLocalOriginSsh(local);
+        ensureLocalOriginSsh(local, gitOverrides);
         this.ensureAgentsMdForLocal(project, repo, local);
 
         project.repos[idx] = {

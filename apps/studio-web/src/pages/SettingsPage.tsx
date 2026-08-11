@@ -5,20 +5,30 @@ import {
   Collapse,
   Form,
   Input,
+  InputNumber,
   Select,
   Space,
   Switch,
   Typography,
   message,
 } from "antd";
-import type { DifyConfigPublic, StudioLanguage } from "@agent-studio/agent-schema";
+import type {
+  DifyConfigPublicForTeam,
+  StudioLanguage,
+} from "@agent-studio/agent-schema";
 import { difyApi, type DifyConfigUpdate } from "../api/dify";
 import { settingsApi } from "../api/settings";
 import { getSelectedTeam } from "../auth/session";
 
+function scopeLabel(scope: "team" | "install" | "none" | undefined) {
+  if (scope === "team") return "当前团队";
+  if (scope === "install") return "安装级默认";
+  return "未设置";
+}
+
 export function SettingsPage() {
   const [form] = Form.useForm<DifyConfigUpdate & { console_password?: string }>();
-  const [config, setConfig] = useState<DifyConfigPublic | null>(null);
+  const [config, setConfig] = useState<DifyConfigPublicForTeam | null>(null);
   const [language, setLanguage] = useState<StudioLanguage>("zh");
   const [loading, setLoading] = useState(false);
   const [savingLang, setSavingLang] = useState(false);
@@ -53,6 +63,10 @@ export function SettingsPage() {
         api_key: "",
         console_token: "",
         console_password: "",
+        git_ssh_key_path: cfg.git_ssh_key_path || "",
+        git_prefer_ssh: cfg.git_prefer_ssh,
+        git_ssh_port: cfg.git_ssh_port,
+        git_ssh_user: cfg.git_ssh_user || "",
       });
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
@@ -98,6 +112,10 @@ export function SettingsPage() {
         "console_email",
         "api_key",
         "console_token",
+        "git_ssh_key_path",
+        "git_prefer_ssh",
+        "git_ssh_port",
+        "git_ssh_user",
       ]);
       const payload: DifyConfigUpdate = {
         enabled: values.enabled,
@@ -107,6 +125,10 @@ export function SettingsPage() {
         response_mode: values.response_mode,
         console_base: values.console_base,
         console_email: values.console_email,
+        git_ssh_key_path: values.git_ssh_key_path,
+        git_prefer_ssh: values.git_prefer_ssh,
+        git_ssh_port: values.git_ssh_port,
+        git_ssh_user: values.git_ssh_user,
       };
       if (values.api_key?.trim()) {
         payload.api_key = values.api_key.trim();
@@ -120,7 +142,7 @@ export function SettingsPage() {
       setConfig(next);
       form.setFieldValue("api_key", "");
       form.setFieldValue("console_token", "");
-      message.success("Dify 配置已保存");
+      message.success("团队 Dify / Git 配置已保存");
     } catch (err) {
       if (err && typeof err === "object" && "errorFields" in err) return;
       message.error(err instanceof Error ? err.message : String(err));
@@ -156,8 +178,8 @@ export function SettingsPage() {
       form.setFieldValue("console_base", res.config.console_base || "");
       message.success(
         res.source === "cookie"
-          ? "已登录 Dify Console（从 Cookie 取得 token）"
-          : "已登录 Dify Console（已保存 access_token）",
+          ? "已登录 Dify Console（Token 已写入当前团队）"
+          : "已登录 Dify Console（Token 已写入当前团队）",
       );
     } catch (err) {
       if (err && typeof err === "object" && "errorFields" in err) return;
@@ -171,9 +193,17 @@ export function SettingsPage() {
     try {
       const res = await difyApi.health({ team_id: requireTeamId() });
       setHealthOk(res.ok);
+      const src =
+        res.auth_source === "team"
+          ? "团队密钥"
+          : res.auth_source === "pipeline"
+            ? "流水线绑定"
+            : res.auth_source === "global"
+              ? "安装级密钥"
+              : "";
       setHealthMsg(
         res.ok
-          ? "已连通 Dify（parameters 可用）"
+          ? `已连通 Dify（parameters 可用${src ? ` · ${src}` : ""}）`
           : res.error || "未配置或连通失败",
       );
     } catch (err) {
@@ -189,7 +219,8 @@ export function SettingsPage() {
           设置
         </Typography.Title>
         <Typography.Text type="secondary">
-          配置 Agent 产出语言与 Dify App API；工单可选择以 Dify 作为执行器启动交付流水线。
+          以下 Dify / Git 配置属于当前所选团队；空字段回退到安装级默认（环境变量或
+          dify-config）。
         </Typography.Text>
       </div>
 
@@ -225,15 +256,21 @@ export function SettingsPage() {
               : "Dify 未启用（工单执行需要先启用并配置 App Key）"
           }
           description={
-            config.console_token_set
-              ? `Console 会话已就绪${config.console_email ? `（${config.console_email}）` : ""}，可用于一键导入 DSL`
-              : "Console 未登录：流水线「一键导入到 Dify」需要先登录 Console"
+            <>
+              App Key 来源：{scopeLabel(config.api_key_scope)}；Console 会话：
+              {scopeLabel(config.console_token_scope)}
+              {config.console_token_set
+                ? config.console_email
+                  ? `（${config.console_email}）`
+                  : ""
+                : " — 流水线「一键导入到 Dify」需要先登录 Console"}
+            </>
           }
         />
       ) : null}
 
       <Form form={form} layout="vertical" disabled={loading}>
-        <Typography.Title level={5}>Dify</Typography.Title>
+        <Typography.Title level={5}>Dify（团队）</Typography.Title>
         <Form.Item name="enabled" label="启用 Dify" valuePropName="checked">
           <Switch />
         </Form.Item>
@@ -250,7 +287,7 @@ export function SettingsPage() {
           label="App API Key"
           extra={
             config?.api_key_set
-              ? "已保存密钥；留空则保持不变"
+              ? `已有密钥（${scopeLabel(config.api_key_scope)}）；留空则保持不变`
               : "在 Dify 应用「访问 API」中复制 Workflow App Key"
           }
         >
@@ -310,7 +347,9 @@ export function SettingsPage() {
             登录并获取 Token
           </Button>
           {config?.console_token_set ? (
-            <Typography.Text type="success">已保存 Console 会话</Typography.Text>
+            <Typography.Text type="success">
+              已保存 Console 会话（{scopeLabel(config.console_token_scope)}）
+            </Typography.Text>
           ) : null}
         </Space>
 
@@ -336,6 +375,42 @@ export function SettingsPage() {
                     }
                   />
                 </Form.Item>
+              ),
+            },
+            {
+              key: "git",
+              label: "高级：团队 Git SSH（仅 Studio ensureCloned）",
+              children: (
+                <>
+                  <Typography.Paragraph type="secondary">
+                    Bridge 执行机仍用其自身 `.env` 的 `BRIDGE_GIT_*`。此处只影响 Studio
+                    API 本机调试克隆。
+                  </Typography.Paragraph>
+                  <Form.Item
+                    name="git_ssh_key_path"
+                    label="SSH 私钥路径"
+                    extra={
+                      config?.git_ssh_key_path_set
+                        ? "已配置路径；可改写。留空保存不会清空（需显式改字段）"
+                        : "例如 ~/.ssh/agent_studio_bot"
+                    }
+                  >
+                    <Input placeholder="~/.ssh/agent_studio_bot" />
+                  </Form.Item>
+                  <Form.Item
+                    name="git_prefer_ssh"
+                    label="优先 SSH remote"
+                    valuePropName="checked"
+                  >
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item name="git_ssh_port" label="SSH 端口（0/空=默认 22）">
+                    <InputNumber min={0} style={{ width: "100%" }} placeholder="2224" />
+                  </Form.Item>
+                  <Form.Item name="git_ssh_user" label="SSH 用户">
+                    <Input placeholder="git" />
+                  </Form.Item>
+                </>
               ),
             },
           ]}

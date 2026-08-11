@@ -537,10 +537,13 @@ export class DifyClientService {
     email: string;
     password: string;
     console_base?: string;
+    team_id?: string;
   }): Promise<{
     ok: true;
     source: "body" | "cookie";
-    config: ReturnType<DifyConfigService["getPublic"]>;
+    config: ReturnType<
+      DifyConfigService["getPublic"] | DifyConfigService["getPublicForTeam"]
+    >;
   }> {
     const email = opts.email.trim();
     const password = opts.password;
@@ -548,10 +551,15 @@ export class DifyClientService {
       throw new BadRequestException("请填写 Dify Console 邮箱和密码");
     }
 
+    const teamId = (opts.team_id || "").trim();
+    const effective = teamId
+      ? this.config.getEffectiveForTeam(teamId)
+      : this.config.get();
+
     const console_base = (
       opts.console_base?.trim() ||
-      this.config.get().console_base?.trim() ||
-      this.config.deriveConsoleBase()
+      effective.console_base?.trim() ||
+      this.config.deriveConsoleBase(effective.api_base)
     ).replace(/\/$/, "");
 
     const attempts: Array<{ label: string; password: string }> = [
@@ -599,12 +607,19 @@ export class DifyClientService {
       const csrf = cookies.csrf_token || "";
 
       if (res.ok && token) {
-        const pub = this.config.setConsoleSession({
-          console_base,
-          console_email: email,
-          console_token: token,
-          console_csrf: csrf,
-        });
+        const pub = teamId
+          ? this.config.setConsoleSessionForTeam(teamId, {
+              console_base,
+              console_email: email,
+              console_token: token,
+              console_csrf: csrf,
+            })
+          : this.config.setConsoleSession({
+              console_base,
+              console_email: email,
+              console_token: token,
+              console_csrf: csrf,
+            });
         return {
           ok: true,
           source: bodyToken ? "body" : "cookie",
@@ -657,8 +672,9 @@ export class DifyClientService {
     return out;
   }
 
-  private consoleHeaders() {
-    const { console_token, console_csrf } = this.config.assertConsoleReady();
+  private consoleHeaders(teamId?: string) {
+    const { console_token, console_csrf } =
+      this.config.assertConsoleReady(teamId);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${console_token}`,
       "Content-Type": "application/json",
@@ -680,6 +696,7 @@ export class DifyClientService {
     description?: string;
     /** When set, overwrite existing app */
     app_id?: string;
+    team_id?: string;
   }): Promise<{
     status: string;
     app_id?: string;
@@ -687,7 +704,8 @@ export class DifyClientService {
     error?: string;
     raw: unknown;
   }> {
-    const { console_base } = this.config.assertConsoleReady();
+    const teamId = (opts.team_id || "").trim() || undefined;
+    const { console_base } = this.config.assertConsoleReady(teamId);
     const body: Record<string, unknown> = {
       mode: "yaml-content",
       yaml_content: opts.yaml,
@@ -700,7 +718,7 @@ export class DifyClientService {
     try {
       res = await fetch(`${console_base}/apps/imports`, {
         method: "POST",
-        headers: this.consoleHeaders(),
+        headers: this.consoleHeaders(teamId),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(60_000),
       });
@@ -719,7 +737,7 @@ export class DifyClientService {
 
     // 202 = pending confirm (version mismatch)
     if (res.status === 202 && data.id) {
-      const confirmed = await this.confirmDslImport(data.id);
+      const confirmed = await this.confirmDslImport(data.id, teamId);
       return {
         status: confirmed.status || "completed",
         app_id: confirmed.app_id || data.app_id,
@@ -752,11 +770,11 @@ export class DifyClientService {
     };
   }
 
-  async confirmDslImport(importId: string) {
-    const { console_base } = this.config.assertConsoleReady();
+  async confirmDslImport(importId: string, teamId?: string) {
+    const { console_base } = this.config.assertConsoleReady(teamId);
     const res = await fetch(`${console_base}/apps/imports/${importId}/confirm`, {
       method: "POST",
-      headers: this.consoleHeaders(),
+      headers: this.consoleHeaders(teamId),
       body: JSON.stringify({}),
       signal: AbortSignal.timeout(60_000),
     });
@@ -783,7 +801,10 @@ export class DifyClientService {
    * Publish the current draft workflow so App API runs use the imported graph.
    * POST /console/api/apps/{appId}/workflows/publish
    */
-  async publishWorkflow(appId: string): Promise<{
+  async publishWorkflow(
+    appId: string,
+    opts?: { team_id?: string },
+  ): Promise<{
     ok: boolean;
     version?: string;
     raw: unknown;
@@ -792,12 +813,13 @@ export class DifyClientService {
     if (!id) {
       throw new BadRequestException("publishWorkflow 需要 app_id");
     }
-    const { console_base } = this.config.assertConsoleReady();
+    const teamId = (opts?.team_id || "").trim() || undefined;
+    const { console_base } = this.config.assertConsoleReady(teamId);
     let res: Response;
     try {
       res = await fetch(`${console_base}/apps/${id}/workflows/publish`, {
         method: "POST",
-        headers: this.consoleHeaders(),
+        headers: this.consoleHeaders(teamId),
         body: JSON.stringify({ marked_name: "", marked_comment: "" }),
         signal: AbortSignal.timeout(60_000),
       });

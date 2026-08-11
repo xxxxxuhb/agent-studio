@@ -129,8 +129,11 @@ export async function prepareProjectRouting(
   const projectId = (order.project_id || "").trim();
 
   if (!projectId) {
-    const agents =
-      override || deps.difyConfig.get().agents_md_path || "auto";
+    const tid = (order.team_id || "").trim();
+    const fallbackAgents = tid
+      ? deps.difyConfig.getEffectiveForTeam(tid).agents_md_path
+      : deps.difyConfig.get().agents_md_path;
+    const agents = override || fallbackAgents || "auto";
     return {
       agents_md_path: agents,
       routing_mode: agents !== "auto" ? "explicit" : "auto",
@@ -153,7 +156,12 @@ export async function prepareProjectRouting(
   const bridgeBase = resolveStudioBridgeBase({
     override: opts.bridgeBaseUrl,
     registeredBaseUrl: deps.registeredBridgeBaseUrl,
-    configured: deps.difyConfig.get().bridge_base_url,
+    configured: (() => {
+      const tid = (order.team_id || "").trim();
+      return tid
+        ? deps.difyConfig.getEffectiveForTeam(tid).bridge_base_url
+        : deps.difyConfig.get().bridge_base_url;
+    })(),
   });
 
   const catalog = await deps.projects.catalogForManager(null, projectId);

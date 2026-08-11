@@ -30,9 +30,54 @@ export const DifyConfigPublicSchema = DifyConfigSchema.extend({
 }).omit({ api_key: true, console_token: true, console_csrf: true });
 export type DifyConfigPublic = z.infer<typeof DifyConfigPublicSchema>;
 
+/** Per-team secret overlays (file: data/team-secrets/{teamId}.yaml, mode 0600). */
+export const TeamSecretsSchema = z.object({
+  team_id: z.string().default(""),
+  /** When set, overrides install enabled for this team. */
+  enabled: z.boolean().optional(),
+  api_base: z.string().optional().default(""),
+  api_key: z.string().optional().default(""),
+  bridge_base_url: z.string().optional().default(""),
+  agents_md_path: z.string().optional().default(""),
+  response_mode: z.enum(["streaming", "blocking"]).optional(),
+  console_base: z.string().optional().default(""),
+  console_email: z.string().optional().default(""),
+  console_token: z.string().optional().default(""),
+  console_csrf: z.string().optional().default(""),
+  /** Absolute or ~/ path used by Studio ensureCloned only (Bridge uses its own .env). */
+  git_ssh_key_path: z.string().optional().default(""),
+  git_prefer_ssh: z.boolean().optional(),
+  git_ssh_port: z.number().int().nonnegative().optional(),
+  git_ssh_user: z.string().optional().default(""),
+});
+export type TeamSecrets = z.infer<typeof TeamSecretsSchema>;
+
+export const TeamSecretsPublicSchema = TeamSecretsSchema.extend({
+  api_key_set: z.boolean().default(false),
+  console_token_set: z.boolean().default(false),
+  git_ssh_key_path_set: z.boolean().default(false),
+}).omit({
+  api_key: true,
+  console_token: true,
+  console_csrf: true,
+});
+export type TeamSecretsPublic = z.infer<typeof TeamSecretsPublicSchema>;
+
+export const DifyConfigPublicForTeamSchema = DifyConfigPublicSchema.extend({
+  team_id: z.string().default(""),
+  api_key_scope: z.enum(["team", "install", "none"]).default("none"),
+  console_token_scope: z.enum(["team", "install", "none"]).default("none"),
+  git_ssh_key_path: z.string().optional().default(""),
+  git_ssh_key_path_set: z.boolean().default(false),
+  git_prefer_ssh: z.boolean().optional(),
+  git_ssh_port: z.number().int().nonnegative().optional(),
+  git_ssh_user: z.string().optional().default(""),
+});
+export type DifyConfigPublicForTeam = z.infer<typeof DifyConfigPublicForTeamSchema>;
+
 /**
  * Per-pipeline Dify Workflow App binding.
- * One Studio pipeline YAML ↔ one Dify Workflow App (API Key).
+ * One Studio pipeline ↔ one Dify Workflow App (API Key).
  */
 export const PipelineDifyBindingSchema = z.object({
   /** When true, Dify runs for this pipeline use this App Key (not the global default). */

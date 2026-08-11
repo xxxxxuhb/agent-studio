@@ -15,12 +15,12 @@ Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远
 ### 存储收尾（YAML → MySQL）
 
 - [x] 流水线 / 数字人 / Bridge 登记迁 MySQL（一次性 YAML 导入，源文件保留）。
-- [ ] 多实例 / 备份策略与 YAML 双轨脱钩（清理残留 `data/{pipelines,agents,bridges}` 写入路径与运维备份说明）。
+- [x] 多实例 / 备份策略与 YAML 双轨脱钩（服务去掉 `data/{pipelines,agents,bridges}` 运行时路径；`sql/README.md` 写清 mysqldump + 仍落盘目录）。
 
 ### 密钥与租户边界
 
-- [ ] Dify / Git 凭证按团队隔离（今日多为安装级密钥 + 成员门禁）。
-- [ ] 团队级密钥轮换与最小权限文档。
+- [x] Dify / Git 凭证按团队隔离（`data/team-secrets/{teamId}.yaml`；解析优先团队，回退安装级）。
+- [x] 团队级密钥轮换与最小权限文档（[`docs/团队密钥与轮换.md`](docs/团队密钥与轮换.md)）。
 
 ## P1 — 稳态运维
 
@@ -76,6 +76,7 @@ Notes (2026-08-10): UI `dify.agent_id` / `agent_name` 仍是元数据；工单�
 
 - [x] 表 `digital_humans` / `pipelines` / `bridges`；服务改 TypeORM；bootstrap 一次性 YAML 导入。
 - [x] Studio 运行时不再读写这三类 YAML（源文件保留供回滚）。
+- [x] 去掉服务侧 `getDataDir` / 死 YAML 路径；备份与多实例说明见 `apps/studio-api/sql/README.md`。
 
 ### Cloud Bridge workspace ownership (2026-08-11)
 
@@ -88,7 +89,7 @@ Notes (2026-08-10): UI `dify.agent_id` / `agent_name` 仍是元数据；工单�
 - [x] **登录与系统权限**：JWT 登录；全局 AuthGuard（health / login / register / Bridge WS 除外）。
 - [x] **团队管理**：团队 → 项目；团队间隔离；角色 owner / member / viewer。
 - [x] **MySQL**：users / teams / team_members / projects；空库 bootstrap admin + 默认团队；YAML 项目一次性迁入。
-- [x] 流水线 / 数字人 / Bridge / 设置按团队隔离；viewer 只读；Dify 仍安装级密钥仅按团队成员门禁。
+- [x] 流水线 / 数字人 / Bridge / 设置按团队隔离；viewer 只读；Dify/Console/Git 可按团队 overlay（见 `team-secrets`）。
 - [x] 工单本体迁 MySQL；viewer 只读。
 
 ### Bridge MR / commit-record parsing

@@ -7,7 +7,6 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { Repository } from "typeorm";
 import {
   BridgeExecutorSchema,
@@ -28,8 +27,6 @@ function shellQuote(value: string): string {
 
 @Injectable()
 export class BridgesService implements OnModuleInit {
-  /** Legacy YAML dir (bootstrap import only). */
-  private dataDir = "";
   private expectedToken = "";
 
   constructor(
@@ -40,19 +37,11 @@ export class BridgesService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.dataDir = path.resolve(
-      process.env.STUDIO_BRIDGE_DIR ||
-        path.join(process.cwd(), "data", "bridges"),
-    );
     this.expectedToken = (
       process.env.STUDIO_BRIDGE_TOKEN ||
       process.env.BRIDGE_TOKEN ||
       ""
     ).trim();
-  }
-
-  getDataDir() {
-    return this.dataDir;
   }
 
   private nowIso() {

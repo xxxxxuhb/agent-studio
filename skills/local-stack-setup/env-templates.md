@@ -51,6 +51,7 @@ STUDIO_GIT_SSH_USER=git
 
 DIFY_ENABLED=true
 DIFY_API_BASE=http://localhost/v1
+# Install-level default; per-team overlays: data/team-secrets/{teamId}.yaml (UI 设置)
 DIFY_API_KEY=
 DIFY_BRIDGE_BASE_URL=http://host.docker.internal:8787
 DIFY_AGENTS_MD_PATH=auto

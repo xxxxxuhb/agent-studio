@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import path from "node:path";
 import { Repository } from "typeorm";
 import {
   DigitalHumanCreateSchema,
@@ -21,20 +20,11 @@ import { DigitalHumanEntity } from "./entities/digital-human.entity";
 
 @Injectable()
 export class DigitalHumansService {
-  /** Legacy YAML dir (bootstrap import only). */
-  private dataDir = path.resolve(
-    process.env.STUDIO_DATA_DIR || path.join(process.cwd(), "data", "agents"),
-  );
-
   constructor(
     @InjectRepository(DigitalHumanEntity)
     private readonly repo: Repository<DigitalHumanEntity>,
     private readonly teams: TeamsService,
   ) {}
-
-  getDataDir() {
-    return this.dataDir;
-  }
 
   private nowIso() {
     return new Date().toISOString();
@@ -332,7 +322,6 @@ export class DigitalHumansService {
       skipped,
       upgraded,
       total: (await this.list()).length,
-      dataDir: this.dataDir,
     };
   }
 

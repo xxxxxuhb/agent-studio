@@ -38,3 +38,4 @@ STUDIO_MYSQL_DATABASE=agent_studio
 - Prefer `deploy/mysql/docker-compose.yml`.
 - Do not require host MySQL on 3306.
 - After schema apply, restart Studio API so bootstrap can create admin + default team.
+- Backup / multi-instance: see `apps/studio-api/sql/README.md` (mysqldump + live file dirs; share one MySQL, do not treat legacy YAML dirs as runtime).

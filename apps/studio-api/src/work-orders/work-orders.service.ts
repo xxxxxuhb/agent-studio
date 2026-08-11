@@ -5,11 +5,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  OnModuleInit,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { In, type FindOptionsWhere, Repository } from "typeorm";
 import {
   WorkOrderCreateSchema,
@@ -105,14 +103,10 @@ export function parseBridgeStageHint(text: string): BridgeStageHint | null {
 }
 
 @Injectable()
-export class WorkOrdersService implements OnModuleInit {
+export class WorkOrdersService {
   private readonly logger = new Logger(WorkOrdersService.name);
   /** Prevent re-entrant auto-approve while decide→sync is in flight. */
   private readonly autoApproveInFlight = new Set<string>();
-  private dataDir = path.resolve(
-    process.env.STUDIO_WORKORDER_DIR ||
-      path.join(process.cwd(), "data", "work-orders"),
-  );
   /** Dedupe agent form/body logs within process lifetime. */
   private readonly loggedBodies = new Set<string>();
 
@@ -130,22 +124,6 @@ export class WorkOrdersService implements OnModuleInit {
     private readonly studioConfig: StudioConfigService,
     private readonly bridges: BridgesService,
   ) {}
-
-  onModuleInit() {
-    this.dataDir = path.resolve(
-      process.env.STUDIO_WORKORDER_DIR ||
-        path.join(process.cwd(), "data", "work-orders"),
-    );
-  }
-
-  /** YAML dir kept for one-shot migrate / fallback reads. */
-  getDataDir() {
-    return this.dataDir;
-  }
-
-  private filePath(id: string) {
-    return path.join(this.getDataDir(), `${id}.yaml`);
-  }
 
   private nowIso() {
     return new Date().toISOString();
@@ -757,7 +735,8 @@ export class WorkOrdersService implements OnModuleInit {
       registeredBaseUrl: await this.bridges.pickRegisteredBaseUrl({
         teamId: order.team_id,
       }),
-      configured: this.difyConfig.get().bridge_base_url,
+      configured: this.difyConfig.getEffectiveForTeam(order.team_id || "")
+        .bridge_base_url,
     });
 
     const catalog = await this.projects.catalogForManager(null, projectId);
@@ -1033,7 +1012,9 @@ export class WorkOrdersService implements OnModuleInit {
       bridge_base_url?: string;
     },
   ): Promise<WorkOrder> {
-    const cfg = this.difyConfig.get();
+    const cfg = this.difyConfig.getEffectiveForTeam(
+      draft.team_id || previous.team_id || "",
+    );
     const pipeline = await this.pipelines.get(draft.run!.pipeline_id);
     const auth = this.difyConfig.resolveAuthForPipeline(pipeline);
     const language = this.studioConfig.languageForTeam(
@@ -1234,7 +1215,7 @@ export class WorkOrdersService implements OnModuleInit {
 
     this.mirrorDifySteps(draft, {
       phase: this.difyPhaseForOrder(draft),
-      nodeTitle: draft.run.dify.form_node_title,
+      nodeTitle: draft.run.dify?.form_node_title,
     });
 
     if (draft.status === "failed" || draft.status === "cancelled") {
@@ -2137,7 +2118,9 @@ export class WorkOrdersService implements OnModuleInit {
     return this.startDifyFromDraft(saved, saved, {
       agents_md_path: saved.run?.selected_agents_md_path,
       routing_mode: "explicit",
-      bridge_base_url: this.difyConfig.get().bridge_base_url,
+      bridge_base_url: this.difyConfig.getEffectiveForTeam(
+        saved.team_id || "",
+      ).bridge_base_url,
     });
   }
 

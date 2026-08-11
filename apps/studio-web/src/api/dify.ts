@@ -1,5 +1,5 @@
 import { get, post, put } from "../http";
-import type { DifyConfigPublic } from "@agent-studio/agent-schema";
+import type { DifyConfigPublicForTeam } from "@agent-studio/agent-schema";
 
 export type DifyConfigUpdate = {
   enabled?: boolean;
@@ -11,6 +11,10 @@ export type DifyConfigUpdate = {
   console_base?: string;
   console_email?: string;
   console_token?: string;
+  git_ssh_key_path?: string;
+  git_prefer_ssh?: boolean;
+  git_ssh_port?: number;
+  git_ssh_user?: string;
 };
 
 export type DifyConsoleLoginBody = {
@@ -22,23 +26,27 @@ export type DifyConsoleLoginBody = {
 export type DifyConsoleLoginResult = {
   ok: true;
   source: "body" | "cookie";
-  config: DifyConfigPublic;
+  config: DifyConfigPublicForTeam;
 };
 
 export const difyApi = {
   getConfig(params: { team_id: string }) {
-    return get<DifyConfigPublic>("/dify/config", { params });
+    return get<DifyConfigPublicForTeam>("/dify/config", { params });
   },
   updateConfig(body: DifyConfigUpdate, params: { team_id: string }) {
-    return put<DifyConfigPublic>("/dify/config", body, { params });
+    return put<DifyConfigPublicForTeam>("/dify/config", body, { params });
   },
   consoleLogin(body: DifyConsoleLoginBody, params: { team_id: string }) {
     return post<DifyConsoleLoginResult>("/dify/console/login", body, { params });
   },
   health(params: { team_id: string }) {
-    return get<DifyConfigPublic & { ok: boolean; error?: string; parameters?: unknown }>(
-      "/dify/health",
-      { params },
-    );
+    return get<
+      DifyConfigPublicForTeam & {
+        ok: boolean;
+        error?: string;
+        parameters?: unknown;
+        auth_source?: string;
+      }
+    >("/dify/health", { params });
   },
 };

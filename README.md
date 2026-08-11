@@ -132,9 +132,9 @@ npx @agent-studio/bridge start --driver cursor \
 |------|------|------|
 | `STUDIO_API_PORT` | `8790` | API 端口 |
 | `STUDIO_LANGUAGE` | `zh` | Agent 产出语言 |
-| `STUDIO_PROJECT_DIR` | `data/projects` | 项目 YAML |
-| `STUDIO_REPOS_DIR` | macOS/Linux `~/AgentStudio`；Windows `C:\.agent-studio` | 默认 git 克隆根目录（不在本仓库内） |
-| `STUDIO_RUN_LOG_DIR` | `data/run-logs` | 按 run_id 的运行日志 |
+| `STUDIO_PROJECT_DIR` | `data/projects` | 旧项目 YAML（一次性迁入 MySQL；非运行时） |
+| `STUDIO_REPOS_DIR` | macOS/Linux `~/AgentStudio`；Windows `C:\.agent-studio` | 可选：Studio UI 调试克隆根（工单工作区在 Bridge） |
+| `STUDIO_RUN_LOG_DIR` | `data/run-logs` | 旧运行日志（一次性迁入；非运行时） |
 | `STUDIO_BRIDGE_TOKEN` / `BRIDGE_HTTP_TOKEN` | — | Bridge 注册 + HTTP 鉴权（Dify/Studio → Bridge Bearer） |
 | `DIFY_*` | — | 见设置页 / `.env.example`；密钥优先 env 或 `data/dify-secrets.yaml` |
 | `AGENT_DRIVER` | `auto` | Bridge 使用的 agent 驱动 |

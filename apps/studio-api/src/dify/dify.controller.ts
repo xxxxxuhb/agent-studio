@@ -8,16 +8,15 @@ import {
   Put,
   Query,
 } from "@nestjs/common";
-import type { DifyConfig } from "@agent-studio/agent-schema";
+import type { DifyConfig, TeamSecrets } from "@agent-studio/agent-schema";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { TeamsService } from "../teams/teams.service";
 import { DifyClientService } from "./dify-client.service";
 import { DifyConfigService } from "./dify-config.service";
 
 /**
- * Dify install secrets remain global (not yet split per team).
- * Endpoints are gated by team membership so only members of the selected
- * team can view/edit the shared install-scoped config.
+ * Dify settings are team-scoped overlays under data/team-secrets/{teamId}.yaml.
+ * Empty fields fall back to install-level dify-config / dify-secrets / DIFY_* env.
  */
 @Controller("dify")
 export class DifyController {
@@ -40,24 +39,23 @@ export class DifyController {
   ) {
     const tid = this.requireTeamId(team_id);
     await this.teams.requireMember(tid, user.id);
-    return this.config.getPublic();
+    return this.config.getPublicForTeam(tid);
   }
 
   @Put("config")
   async updateConfig(
     @CurrentUser() user: RequestUser,
     @Query("team_id") team_id: string | undefined,
-    @Body() body: Partial<DifyConfig>,
+    @Body() body: Partial<DifyConfig> & Partial<TeamSecrets>,
   ) {
     const tid = this.requireTeamId(team_id);
     await this.teams.requireWritableMember(tid, user.id);
-    return this.config.update(body);
+    return this.config.updateForTeam(tid, body);
   }
 
   /**
-   * Exchange Console email/password for access_token and persist it.
+   * Exchange Console email/password for access_token and persist it on the team.
    * Password is never written to disk.
-   * Secrets remain install-scoped (not per-team yet).
    */
   @Post("console/login")
   async consoleLogin(
@@ -76,6 +74,7 @@ export class DifyController {
       email: body.email || "",
       password: body.password || "",
       console_base: body.console_base,
+      team_id: tid,
     });
   }
 
@@ -86,13 +85,14 @@ export class DifyController {
   ) {
     const tid = this.requireTeamId(team_id);
     await this.teams.requireMember(tid, user.id);
-    const pub = this.config.getPublic();
+    const pub = this.config.getPublicForTeam(tid);
     if (!pub.enabled || !pub.api_key_set) {
       return { ok: false, ...pub, error: "not configured" };
     }
     try {
-      const parameters = await this.client.getParameters();
-      return { ok: true, ...pub, parameters };
+      const auth = this.config.resolveAuthForTeam(tid);
+      const parameters = await this.client.getParameters(auth);
+      return { ok: true, ...pub, parameters, auth_source: auth.source };
     } catch (err) {
       return {
         ok: false,

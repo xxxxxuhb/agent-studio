@@ -301,6 +301,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   private yamlAgentsDir() {
+    // One-shot migrate-read only (Studio no longer writes agent YAML at runtime).
     return path.resolve(
       process.env.STUDIO_DATA_DIR || path.join(process.cwd(), "data", "agents"),
     );
@@ -371,6 +372,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   private yamlPipelinesDir() {
+    // One-shot migrate-read only (Studio no longer writes pipeline YAML at runtime).
     return path.resolve(
       process.env.STUDIO_PIPELINE_DIR ||
         path.join(process.cwd(), "data", "pipelines"),
@@ -442,6 +444,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   private yamlBridgesDir() {
+    // One-shot migrate-read only (Studio no longer writes bridge YAML at runtime).
     return path.resolve(
       process.env.STUDIO_BRIDGE_DIR ||
         path.join(process.cwd(), "data", "bridges"),

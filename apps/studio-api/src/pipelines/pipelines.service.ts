@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import path from "node:path";
 import { Repository } from "typeorm";
 import {
   PipelineComposeSchema,
@@ -34,12 +33,6 @@ function resolveBridgeBaseUrl(configured?: string): string {
 
 @Injectable()
 export class PipelinesService {
-  /** Legacy YAML dir (bootstrap import only). */
-  private dataDir = path.resolve(
-    process.env.STUDIO_PIPELINE_DIR ||
-      path.join(process.cwd(), "data", "pipelines"),
-  );
-
   constructor(
     @InjectRepository(PipelineEntity)
     private readonly repo: Repository<PipelineEntity>,
@@ -47,10 +40,6 @@ export class PipelinesService {
     private readonly difyConfig: DifyConfigService,
     private readonly teams: TeamsService,
   ) {}
-
-  getDataDir() {
-    return this.dataDir;
-  }
 
   private nowIso() {
     return new Date().toISOString();
@@ -340,7 +329,6 @@ export class PipelinesService {
       imported,
       skipped,
       total: (await this.list()).length,
-      dataDir: this.dataDir,
     };
   }
 
@@ -368,7 +356,10 @@ export class PipelinesService {
       fallback_reason?: string;
     } = {};
 
-    const agentDraft = await this.tryComposeViaBridge(body.prompt);
+    const agentDraft = await this.tryComposeViaBridge(
+      body.prompt,
+      body.team_id,
+    );
     if (agentDraft.ok) {
       draft = agentDraft.draft;
       generatedBy = "agent";
@@ -436,7 +427,10 @@ export class PipelinesService {
     return this.compose(body);
   }
 
-  private async tryComposeViaBridge(prompt: string): Promise<
+  private async tryComposeViaBridge(
+    prompt: string,
+    teamId?: string,
+  ): Promise<
     | {
         ok: true;
         draft: PipelineCreate;
@@ -455,9 +449,11 @@ export class PipelinesService {
       return { ok: false, reason: "no enabled digital humans" };
     }
 
-    const bridgeBase = resolveBridgeBaseUrl(
-      this.difyConfig.get().bridge_base_url,
-    );
+    const tid = (teamId || "").trim();
+    const configured = tid
+      ? this.difyConfig.getEffectiveForTeam(tid).bridge_base_url
+      : this.difyConfig.get().bridge_base_url;
+    const bridgeBase = resolveBridgeBaseUrl(configured);
     const url = `${bridgeBase}/compose/pipeline`;
     try {
       const res = await fetch(url, {
