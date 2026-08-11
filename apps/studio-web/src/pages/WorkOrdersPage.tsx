@@ -26,6 +26,7 @@ import {
   SyncOutlined,
   StopOutlined,
 } from "@ant-design/icons";
+import { useSearchParams } from "react-router-dom";
 import type { PipelinePublic, Project, WorkOrder, WorkOrderCreate } from "@agent-studio/agent-schema";
 import { pipelinesApi } from "../api/pipelines";
 import { projectsApi } from "../api/projects";
@@ -41,11 +42,13 @@ function genId() {
 }
 
 export function WorkOrdersPage() {
+  const [searchParams] = useSearchParams();
+  const deepLinkId = (searchParams.get("id") || "").trim();
   const [items, setItems] = useState<WorkOrder[]>([]);
   const [pipelines, setPipelines] = useState<PipelinePublic[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [total, setTotal] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(deepLinkId || null);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [loading, setLoading] = useState(false);
@@ -98,6 +101,10 @@ export function WorkOrdersPage() {
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status]);
+
+  useEffect(() => {
+    if (deepLinkId) setSelectedId(deepLinkId);
+  }, [deepLinkId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -442,6 +449,7 @@ export function WorkOrdersPage() {
               selected ? (
                 <Space wrap>
                   {selected.status === "draft" ||
+                  selected.status === "queued" ||
                   selected.status === "completed" ||
                   selected.status === "rejected" ||
                   selected.status === "failed" ||
@@ -455,7 +463,7 @@ export function WorkOrdersPage() {
                         setStartOpen(true);
                       }}
                     >
-                      开始流水线
+                      {selected.status === "queued" ? "调整排队 / 启动" : "开始流水线"}
                     </Button>
                   ) : null}
                   {selected.run?.dify?.workflow_run_id ? (
@@ -472,13 +480,14 @@ export function WorkOrdersPage() {
                     </Button>
                   ) : null}
                   {selected.status === "running" ||
-                  selected.status === "pending_approval" ? (
+                  selected.status === "pending_approval" ||
+                  selected.status === "queued" ? (
                     <Button
                       danger
                       icon={<StopOutlined />}
                       onClick={() => void cancelRun()}
                     >
-                      结束运行
+                      {selected.status === "queued" ? "取消排队" : "结束运行"}
                     </Button>
                   ) : null}
                   {selected.status === "draft" ||

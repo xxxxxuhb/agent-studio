@@ -105,13 +105,19 @@ CREATE TABLE IF NOT EXISTS `run_logs` (
   `executor` varchar(64) NOT NULL DEFAULT '',
   `project_id` varchar(64) NOT NULL DEFAULT '',
   `work_order_status` varchar(32) NOT NULL DEFAULT '',
+  `dify_workflow_run_id` varchar(128) NOT NULL DEFAULT '',
+  `bridge_run_id` varchar(64) NOT NULL DEFAULT '',
+  `bridge_stage` varchar(64) NOT NULL DEFAULT '',
+  `last_error` text NOT NULL,
   `started_at` varchar(40) NOT NULL,
   `updated_at` varchar(40) NOT NULL,
   `entry_count` int NOT NULL DEFAULT 0,
   `sources` json NOT NULL,
   PRIMARY KEY (`run_id`),
   KEY `IDX_run_logs_work_order_id` (`work_order_id`),
-  KEY `IDX_run_logs_team_id` (`team_id`)
+  KEY `IDX_run_logs_team_id` (`team_id`),
+  KEY `IDX_run_logs_dify_workflow_run_id` (`dify_workflow_run_id`),
+  KEY `IDX_run_logs_bridge_run_id` (`bridge_run_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `run_log_entries` (

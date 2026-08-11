@@ -21,6 +21,8 @@ jobs:
       - run: npm run typecheck -w @agent-studio/studio-api
       - name: Bridge unit tests
         run: npm test -w @agent-studio/bridge
+      - name: Studio API unit tests
+        run: npm test -w @agent-studio/studio-api
       - name: Build packages
         run: |
           npm run build -w @agent-studio/bridge

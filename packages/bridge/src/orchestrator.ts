@@ -26,8 +26,16 @@ const DATA_DIR = path.resolve(
   process.env.BRIDGE_DATA_DIR || path.join(process.cwd(), "data", "bridge-runs"),
 );
 
-function runsFile(): string {
+export function bridgeDataDir(): string {
+  return DATA_DIR;
+}
+
+export function bridgeRunsFile(): string {
   return path.join(DATA_DIR, "runs.json");
+}
+
+function runsFile(): string {
+  return bridgeRunsFile();
 }
 
 function loadAll(): Record<string, RunRecord> {
@@ -40,6 +48,15 @@ function loadAll(): Record<string, RunRecord> {
 function saveAll(all: Record<string, RunRecord>): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(runsFile(), JSON.stringify(all, null, 2));
+}
+
+/** Full run map (for GC / ops). */
+export function loadAllRuns(): Record<string, RunRecord> {
+  return loadAll();
+}
+
+export function replaceAllRuns(all: Record<string, RunRecord>): void {
+  saveAll(all);
 }
 
 function saveRun(run: RunRecord): void {

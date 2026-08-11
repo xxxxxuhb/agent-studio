@@ -5,6 +5,7 @@ Single entrypoint + Docker MySQL:
 | File | Purpose |
 |------|---------|
 | [`init.sql`](./init.sql) | Create DB `agent_studio` + tables |
+| [`migrate-run-log-correlation.sql`](./migrate-run-log-correlation.sql) | Add run_logs Dify/Bridge ID columns (existing DBs) |
 | [`../docker-compose.mysql.yml`](../docker-compose.mysql.yml) | MySQL 8.4 on host port **3316** |
 
 ```bash

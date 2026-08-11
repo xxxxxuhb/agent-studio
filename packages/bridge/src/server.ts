@@ -126,6 +126,69 @@ export function createBridgeApp() {
     return getRun(id);
   });
 
+  app.get("/runs/:id/artifacts", async (req) => {
+    const { id } = req.params as { id: string };
+    const { listRunArtifacts } = await import("./artifacts.js");
+    return listRunArtifacts(id);
+  });
+
+  app.get("/runs/:id/artifacts/:name", async (req, reply) => {
+    const { id, name } = req.params as { id: string; name: string };
+    try {
+      const { readRunArtifact } = await import("./artifacts.js");
+      return readRunArtifact(id, decodeURIComponent(name));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/not found/i.test(message)) {
+        return reply.code(404).send({ error: "not_found", message });
+      }
+      if (/path|name|unsupported|required|escapes|traversal/i.test(message)) {
+        return reply.code(400).send({ error: "bad_request", message });
+      }
+      throw err;
+    }
+  });
+
+  /** Opt-in disk GC (auth required). Default dry-run unless body.apply=true. */
+  app.post("/admin/gc", async (req) => {
+    const body = z
+      .object({
+        apply: z.boolean().optional().default(false),
+        dry_run: z.boolean().optional(),
+        prompt_hours: z.number().nonnegative().optional(),
+        artifact_days: z.number().nonnegative().optional(),
+        runs_json_days: z.number().nonnegative().optional(),
+      })
+      .parse(req.body ?? {});
+    const { resolveGcOptionsFromEnv, runBridgeGc } = await import("./gc.js");
+    const dryRun =
+      body.dry_run === true ? true : body.apply ? false : undefined;
+    const protectedRunIds = listRuns()
+      .filter(
+        (r) =>
+          r.status !== "completed" &&
+          r.status !== "rejected" &&
+          r.status !== "failed",
+      )
+      .map((r) => r.id);
+    return runBridgeGc(
+      resolveGcOptionsFromEnv({
+        dryRun,
+        promptMaxAgeMs:
+          body.prompt_hours != null ? body.prompt_hours * 3600_000 : undefined,
+        artifactMaxAgeMs:
+          body.artifact_days != null
+            ? body.artifact_days * 86_400_000
+            : undefined,
+        runsJsonMaxAgeMs:
+          body.runs_json_days != null
+            ? body.runs_json_days * 86_400_000
+            : undefined,
+        protectedRunIds,
+      }),
+    );
+  });
+
   app.post("/workspace/ensure", async (req) => {
     const body = z
       .object({

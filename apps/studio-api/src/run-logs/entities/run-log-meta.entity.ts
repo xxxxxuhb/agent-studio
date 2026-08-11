@@ -37,6 +37,20 @@ export class RunLogMetaEntity {
   @Column({ type: "varchar", length: 32, default: "" })
   work_order_status!: string;
 
+  @Index()
+  @Column({ type: "varchar", length: 128, default: "" })
+  dify_workflow_run_id!: string;
+
+  @Index()
+  @Column({ type: "varchar", length: 64, default: "" })
+  bridge_run_id!: string;
+
+  @Column({ type: "varchar", length: 64, default: "" })
+  bridge_stage!: string;
+
+  @Column({ type: "text", default: "" })
+  last_error!: string;
+
   @Column({ type: "varchar", length: 40 })
   started_at!: string;
 

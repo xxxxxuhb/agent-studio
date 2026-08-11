@@ -97,7 +97,7 @@ export async function ensureWorkspaceViaBridge(
   }
 }
 
-function mergeCatalogWithBridgePaths(
+export function mergeCatalogWithBridgePaths(
   catalogRepos: CatalogRepo[],
   bridgeRepos: BridgeWorkspaceRepo[],
 ): CatalogRepo[] {

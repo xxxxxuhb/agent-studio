@@ -85,6 +85,79 @@ program
     });
   });
 
+program
+  .command("gc")
+  .description(
+    "Clean stale Bridge prompt temps + terminal docs/dify-runs artifacts (safe; never deletes whole clones)",
+  )
+  .option("--apply", "Actually delete (default is dry-run)", false)
+  .option("--dry-run", "Force dry-run even if BRIDGE_GC_DRY_RUN=false", false)
+  .option(
+    "--prompt-hours <n>",
+    "Max age for .agent-studio/prompt-* files",
+    (v) => Number(v),
+  )
+  .option(
+    "--artifact-days <n>",
+    "Max age for terminal/orphan docs/dify-runs/{runId}",
+    (v) => Number(v),
+  )
+  .option(
+    "--runs-json-days <n>",
+    "Max age for terminal entries pruned from runs.json",
+    (v) => Number(v),
+  )
+  .option("--env <file>", "Extra .env file")
+  .action(async (opts: {
+    apply?: boolean;
+    dryRun?: boolean;
+    promptHours?: number;
+    artifactDays?: number;
+    runsJsonDays?: number;
+    env?: string;
+  }) => {
+    if (opts.env) loadDotEnv([opts.env]);
+    const { resolveGcOptionsFromEnv, runBridgeGc } = await import("./gc.js");
+    const dryRun = opts.dryRun ? true : opts.apply ? false : undefined;
+    const resolved = resolveGcOptionsFromEnv({
+      dryRun,
+      promptMaxAgeMs:
+        opts.promptHours != null && Number.isFinite(opts.promptHours)
+          ? opts.promptHours * 3600_000
+          : undefined,
+      artifactMaxAgeMs:
+        opts.artifactDays != null && Number.isFinite(opts.artifactDays)
+          ? opts.artifactDays * 86_400_000
+          : undefined,
+      runsJsonMaxAgeMs:
+        opts.runsJsonDays != null && Number.isFinite(opts.runsJsonDays)
+          ? opts.runsJsonDays * 86_400_000
+          : undefined,
+    });
+    const result = runBridgeGc(resolved);
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: result.dryRun,
+          reposRoot: result.reposRoot,
+          dataDir: result.dataDir,
+          deleted: result.deleted.length,
+          skipped: result.skipped.length,
+          prunedRunIds: result.prunedRunIds,
+          bytesFreed: result.bytesFreed,
+          sample: result.deleted.slice(0, 20),
+        },
+        null,
+        2,
+      ),
+    );
+    if (result.dryRun) {
+      console.error(
+        "dry-run only — re-run with --apply to delete (never removes whole repo clones)",
+      );
+    }
+  });
+
 program.parseAsync(process.argv).catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);

@@ -14,6 +14,7 @@ import { CheckOutlined, CloseOutlined, ProfileOutlined } from "@ant-design/icons
 import { Link } from "react-router-dom";
 import type { WorkOrder, WorkOrderRunStep } from "@agent-studio/agent-schema";
 import { AgentOutputView } from "./AgentOutputView";
+import { RunArtifactsPanel } from "./RunArtifactsPanel";
 import {
   ClarificationChecklist,
   hasOpenQuestions,
@@ -136,6 +137,11 @@ export function WorkOrderRunPanel({
 
   const difyAlert = run.dify ? describeDifyAlert(order, run.dify) : null;
   const events = run.events || [];
+  const queueNote =
+    order.status === "queued"
+      ? run.pending_start?.note ||
+        "团队 Bridge 忙碌，工单排队中；空闲后将自动启动。"
+      : "";
   const dryRun =
     Boolean(run.dify?.bridge_dry_run) ||
     events.some((e) => e.dry_run) ||
@@ -173,6 +179,32 @@ export function WorkOrderRunPanel({
         </Link>
       </div>
 
+      {queueNote ? (
+        <Alert
+          type="info"
+          showIcon
+          message="排队等待空闲 Bridge"
+          description={queueNote}
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
+
+      <Collapse
+        className="wo-run-block"
+        items={[
+          {
+            key: "artifacts",
+            label: "Bridge 产物（docs/dify-runs）",
+            children: (
+              <RunArtifactsPanel
+                runId={run.run_id}
+                bridgeRunId={run.dify?.bridge_run_id}
+              />
+            ),
+          },
+        ]}
+      />
+
       <div className="wo-run-meta">
         <div className="wo-run-meta-item">
           <span className="wo-run-meta-label">执行器</span>
@@ -194,6 +226,66 @@ export function WorkOrderRunPanel({
           <Tag>
             {humanGates}/{run.steps.length} 步
           </Tag>
+        </div>
+        <div className="wo-run-meta-item">
+          <span className="wo-run-meta-label">关联 ID</span>
+          <Space size={4} wrap>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Studio
+            </Typography.Text>
+            <Typography.Text code copyable={{ text: run.run_id }} style={{ fontSize: 12 }}>
+              {run.run_id}
+            </Typography.Text>
+            <Link to={`/logs/${run.run_id}`}>
+              <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
+                日志
+              </Button>
+            </Link>
+            {run.dify?.workflow_run_id ? (
+              <>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Dify
+                </Typography.Text>
+                <Typography.Text
+                  code
+                  copyable={{ text: run.dify.workflow_run_id }}
+                  style={{ fontSize: 12 }}
+                >
+                  {run.dify.workflow_run_id.length > 14
+                    ? `${run.dify.workflow_run_id.slice(0, 12)}…`
+                    : run.dify.workflow_run_id}
+                </Typography.Text>
+                <Link
+                  to={`/logs?q=${encodeURIComponent(run.dify.workflow_run_id)}`}
+                >
+                  <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
+                    检索
+                  </Button>
+                </Link>
+              </>
+            ) : null}
+            {run.dify?.bridge_run_id ? (
+              <>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Bridge
+                </Typography.Text>
+                <Typography.Text
+                  code
+                  copyable={{ text: run.dify.bridge_run_id }}
+                  style={{ fontSize: 12 }}
+                >
+                  {run.dify.bridge_run_id}
+                </Typography.Text>
+                <Link
+                  to={`/logs?q=${encodeURIComponent(run.dify.bridge_run_id)}`}
+                >
+                  <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
+                    检索
+                  </Button>
+                </Link>
+              </>
+            ) : null}
+          </Space>
         </div>
         {currentStep ? (
           <div className="wo-run-meta-item">
@@ -290,11 +382,28 @@ export function WorkOrderRunPanel({
           description={
             <Space direction="vertical" size={0}>
               <Typography.Text type="secondary">
-                run: {run.dify.workflow_run_id || "-"}
+                Dify{" "}
+                <Typography.Text code copyable>
+                  {run.dify.workflow_run_id || "-"}
+                </Typography.Text>
+                {run.dify.bridge_run_id ? (
+                  <>
+                    {" · "}Bridge{" "}
+                    <Typography.Text code copyable>
+                      {run.dify.bridge_run_id}
+                    </Typography.Text>
+                  </>
+                ) : null}
                 {run.dify.last_synced_at
                   ? ` · synced ${run.dify.last_synced_at}`
                   : ""}
               </Typography.Text>
+              {run.dify.raw_summary && !run.dify.error ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {run.dify.raw_summary.slice(0, 240)}
+                  {run.dify.raw_summary.length > 240 ? "…" : ""}
+                </Typography.Text>
+              ) : null}
               {run.dify.error ? (
                 <Typography.Text
                   type={

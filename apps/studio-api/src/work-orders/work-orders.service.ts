@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
@@ -56,6 +57,11 @@ import {
   shouldClearFormTokenOnRemoteStatus,
 } from "./work-order-dify-utils";
 import {
+  applyBridgeGitNote,
+  bridgeGitEventMessage,
+  parseBridgeGitNote,
+} from "./work-order-bridge-git";
+import {
   ensureWorkspaceViaBridge,
   prepareProjectRouting as prepareProjectRoutingFn,
 } from "./work-order-routing";
@@ -64,6 +70,7 @@ export {
   isTransientDifyFailure,
   studioReachableBridgeBase,
 } from "./work-order-dify-utils";
+export { parseBridgeGitNote } from "./work-order-bridge-git";
 
 /** Extract Bridge stage payload from Dify form/step text when present. */
 export function parseBridgeStageHint(text: string): BridgeStageHint | null {
@@ -108,7 +115,7 @@ export function parseBridgeStageHint(text: string): BridgeStageHint | null {
 }
 
 @Injectable()
-export class WorkOrdersService {
+export class WorkOrdersService implements OnModuleInit {
   private readonly logger = new Logger(WorkOrdersService.name);
   /** Prevent re-entrant auto-approve while decide→sync is in flight. */
   private readonly autoApproveInFlight = new Set<string>();
@@ -116,6 +123,8 @@ export class WorkOrdersService {
   private readonly syncInFlight = new Map<string, Promise<WorkOrder>>();
   /** Dedupe agent form/body logs within process lifetime. */
   private readonly loggedBodies = new Set<string>();
+  /** Serialize Bridge-idle queue admission per team. */
+  private readonly admitLocks = new Set<string>();
 
   constructor(
     @InjectRepository(WorkOrderEntity)
@@ -131,6 +140,12 @@ export class WorkOrdersService {
     private readonly studioConfig: StudioConfigService,
     private readonly bridges: BridgesService,
   ) {}
+
+  onModuleInit() {
+    this.bridges.onExecutorIdle((bridge) => {
+      void this.tryAdmitQueued(bridge.team_id || "");
+    });
+  }
 
   private nowIso() {
     return new Date().toISOString();
@@ -300,59 +315,24 @@ export class WorkOrdersService {
 
   /** When Bridge review stage reports review commit / Bridge MR, mirror into run.git. */
   private maybeNoteBridgeGit(order: WorkOrder, text: string, step?: WorkOrderRunStep) {
-    if (!order.run || !text) return;
-    if (!/\[bridge\]\s*git:/i.test(text)) return;
-
-    const committed = text.match(
-      /committed\s+([0-9a-f]{7,40})\s+on\s+(\S+)/i,
-    );
-    const cleanPush = text.match(
-      /pushed\s+existing\s+(\S+)\s+@\s+([0-9a-f]{7,40})/i,
-    );
-    const sha = committed?.[1] || cleanPush?.[2] || "";
-    const branch = (committed?.[2] || cleanPush?.[1] || "").replace(
-      /[)\].,;]+$/,
-      "",
-    );
-    if (!sha || !branch) return;
-
-    const prMatch = text.match(
-      /(?:\|\s*pr:\s*|\bpr:\s*|\bopened\s+(?:GitHub\s+)?PR:\s*|\bopened\s+GitLab\s+MR:\s*|\bexisting\s+(?:GitHub\s+PR|GitLab\s+MR):\s*)(https?:\/\/\S+)/i,
-    );
-    const prUrl = (prMatch?.[1] || "").replace(/[)\].,;]+$/, "");
-    if (
-      order.run.git?.commit_sha === sha &&
-      (!prUrl || order.run.git?.pr_url === prUrl)
-    ) {
-      return;
-    }
-    const stamp = this.nowIso();
-    const pushed = /\bpushed\b/i.test(text);
-    order.run.git = {
-      status: prUrl ? "pr_open" : pushed ? "pushed" : "committed",
-      branch,
-      base_sha: order.run.git?.base_sha || "",
-      head_sha: sha,
-      commit_sha: sha,
-      commit_message:
-        order.run.git?.commit_message ||
-        `review: pass and commit`,
-      pr_url: prUrl || order.run.git?.pr_url || "",
-      committed_at: stamp,
-      committed_by_step: step?.step_id || order.run.git?.committed_by_step || "",
-      note: prUrl
-        ? `Review committed; Bridge opened PR: ${prUrl}`
-        : "Review agent committed working tree changes.",
-    };
+    const parsed = parseBridgeGitNote(text);
+    if (!parsed || !order.run) return;
+    const applied = applyBridgeGitNote(order, text, {
+      stamp: this.nowIso(),
+      step,
+    });
+    if (!applied) return;
     this.appendRunEvent(order, {
       type: "info",
       level: "info",
-      message: prUrl
-        ? `评审已提交 ${sha.slice(0, 12)} @ ${branch}，Bridge 已开 PR: ${prUrl}`
-        : `评审已提交代码 ${sha.slice(0, 12)} @ ${branch}`,
+      message: bridgeGitEventMessage(parsed),
       step_id: step?.step_id,
       agent: step?.agent,
-      detail: { commit_sha: sha, branch, pr_url: prUrl || undefined },
+      detail: {
+        commit_sha: parsed.sha,
+        branch: parsed.branch,
+        pr_url: parsed.prUrl || undefined,
+      },
     });
   }
 
@@ -864,11 +844,21 @@ export class WorkOrdersService {
     this.difyConfig.resolveAuthForPipeline(pipeline);
 
     const cfg = this.difyConfig.getEffectiveForTeam(order.team_id || "");
-    const bridgePick = await this.bridges.requireReachableBaseUrl({
+    const resolved = await this.bridges.resolveForNewRun({
       teamId: order.team_id,
       override: body.bridge_base_url,
       configured: cfg.bridge_base_url,
     });
+    if (!resolved.ok) {
+      if (resolved.reason === "busy_pool") {
+        return this.enqueueForBridge(order, body, resolved.message);
+      }
+      throw new BadRequestException(resolved.message);
+    }
+    const bridgePick = {
+      studioBaseUrl: resolved.studioBaseUrl,
+      registeredBaseUrl: resolved.registeredBaseUrl,
+    };
     const difyBridgeBase = resolveDifyBridgeBase({
       override: body.bridge_base_url,
       registeredBaseUrl: bridgePick.registeredBaseUrl,
@@ -970,6 +960,105 @@ export class WorkOrdersService {
     return this.start(id, input);
   }
 
+  /** Soft-queue a start until a team Bridge becomes idle (no Dify call yet). */
+  private async enqueueForBridge(
+    order: WorkOrder,
+    body: ReturnType<typeof WorkOrderStartSchema.parse>,
+    note: string,
+  ): Promise<WorkOrder> {
+    const stamp = this.nowIso();
+    const pipeline = await this.pipelines.get(body.pipeline_id);
+    const next = WorkOrderSchema.parse({
+      ...order,
+      status: "queued",
+      pipeline_id: pipeline.id,
+      run: {
+        run_id: `q-${randomUUID().slice(0, 8)}`,
+        pipeline_id: pipeline.id,
+        pipeline_name: pipeline.name,
+        executor: "dify",
+        auto_approve: Boolean(body.auto_approve),
+        current_step_index: 0,
+        steps: [],
+        events: [],
+        started_at: stamp,
+        pending_start: {
+          pipeline_id: body.pipeline_id,
+          auto_approve: Boolean(body.auto_approve),
+          agents_md_path: body.agents_md_path,
+          bridge_base_url: body.bridge_base_url,
+          reuse_previous_routing: Boolean(body.reuse_previous_routing),
+          enqueued_at: stamp,
+          note,
+        },
+      },
+    });
+    this.appendRunEvent(next, {
+      type: "info",
+      level: "warn",
+      message: note,
+      detail: { queued: true, pipeline_id: pipeline.id },
+    });
+    this.logger.log(
+      `work-order ${order.id} queued for idle Bridge (team=${order.team_id || "-"})`,
+    );
+    return this.write(next);
+  }
+
+  /** When a Bridge leaves busy→online, admit the oldest queued work order for that team. */
+  async tryAdmitQueued(teamId: string): Promise<void> {
+    const key = (teamId || "").trim() || "__unscoped__";
+    if (this.admitLocks.has(key)) return;
+    this.admitLocks.add(key);
+    try {
+      const idle = await this.bridges.pickRegisteredBaseUrl({
+        teamId: teamId || undefined,
+        preferIdle: true,
+      });
+      if (!idle) return;
+
+      const rows = await this.repo.find({ where: { status: "queued" } });
+      const candidates = rows
+        .map((e) => this.toWorkOrder(e))
+        .filter((w) => {
+          if (!(w.run?.pending_start?.pipeline_id || "").trim()) return false;
+          const wid = (w.team_id || "").trim();
+          const tid = (teamId || "").trim();
+          if (!tid) return !wid;
+          return wid === tid || !wid;
+        })
+        .sort((a, b) => {
+          const ae = a.run?.pending_start?.enqueued_at || a.run?.started_at || "";
+          const be = b.run?.pending_start?.enqueued_at || b.run?.started_at || "";
+          return ae.localeCompare(be);
+        });
+      const next = candidates[0];
+      if (!next?.run?.pending_start) return;
+
+      const pending = next.run.pending_start;
+      this.logger.log(
+        `admitting queued work-order ${next.id} on idle Bridge (team=${key})`,
+      );
+      try {
+        await this.start(next.id, {
+          pipeline_id: pending.pipeline_id,
+          auto_approve: pending.auto_approve,
+          agents_md_path: pending.agents_md_path,
+          bridge_base_url: pending.bridge_base_url,
+          reuse_previous_routing: pending.reuse_previous_routing,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `failed to admit queued work-order ${next.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    } finally {
+      this.admitLocks.delete(key);
+    }
+  }
+
   /**
    * End the current run if active, then start a new one.
    * Defaults pipeline/executor from the last run — for soft-failed Dify runs, Bridge 503, etc.
@@ -979,6 +1068,7 @@ export class WorkOrdersService {
     const order = await this.get(id);
     const pipeline_id =
       body.pipeline_id?.trim() ||
+      order.run?.pending_start?.pipeline_id ||
       order.run?.pipeline_id ||
       order.pipeline_id ||
       "";
@@ -994,6 +1084,8 @@ export class WorkOrdersService {
         id,
         body.feedback || "重新执行：结束旧运行",
       );
+    } else if (order.status === "queued") {
+      await this.cancelQueued(id, body.feedback || "重新执行：取消排队后重启");
     }
 
     // After rejectAndEnd the in-memory order is stale; reload so we can reuse routing.
@@ -1004,7 +1096,11 @@ export class WorkOrdersService {
       auto_approve:
         body.auto_approve !== undefined
           ? body.auto_approve
-          : Boolean(latest.run?.auto_approve ?? order.run?.auto_approve),
+          : Boolean(
+              latest.run?.auto_approve ??
+                latest.run?.pending_start?.auto_approve ??
+                order.run?.auto_approve,
+            ),
       agents_md_path: body.agents_md_path,
       bridge_base_url: body.bridge_base_url,
       // Default: reuse last manager plan (skip slow Cursor /routing/select).
@@ -1089,6 +1185,8 @@ export class WorkOrdersService {
       commit_after_review: true,
       studio_pipeline_id: pipeline.id,
       studio_pipeline_name: pipeline.name,
+      studio_run_id: draft.run?.run_id || "",
+      studio_work_order_id: draft.id,
       studio_project_id: draft.project_id || "",
       studio_selected_repos: JSON.stringify(draft.run?.selected_repo_ids || []),
       studio_repo_plan: JSON.stringify(
@@ -1114,6 +1212,7 @@ export class WorkOrdersService {
       studio_agents: JSON.stringify(agentManifest),
       raw_requirement: [
         `【工单】${draft.title} (${draft.id})`,
+        `【Studio run】${draft.run?.run_id || "-"}`,
         `【类别】${
           (
             {
@@ -2224,9 +2323,40 @@ export class WorkOrdersService {
     );
   }
 
+  /** Drop a Bridge soft-queue without calling Dify. */
+  async cancelQueued(id: string, feedback = ""): Promise<WorkOrder> {
+    const order = await this.get(id);
+    if (order.status !== "queued") {
+      throw new BadRequestException(`当前状态不是排队中: ${order.status}`);
+    }
+    const stamp = this.nowIso();
+    const next = WorkOrderSchema.parse({
+      ...order,
+      status: "cancelled",
+      run: order.run
+        ? {
+            ...order.run,
+            finished_at: stamp,
+            pending_start: undefined,
+          }
+        : null,
+    });
+    if (next.run) {
+      this.appendRunEvent(next, {
+        type: "run_finished",
+        level: "info",
+        message: `已取消 Bridge 排队：${feedback || "cancelQueued"}`,
+      });
+    }
+    return this.write(next);
+  }
+
   /** Force-end current run and stop the active Dify workflow when present. */
   async rejectAndEnd(id: string, feedback = ""): Promise<WorkOrder> {
     const order = await this.get(id);
+    if (order.status === "queued") {
+      return this.cancelQueued(id, feedback || "取消 Bridge 排队");
+    }
     if (!order.run) throw new BadRequestException("工单尚未启动流水线");
     if (order.status !== "running" && order.status !== "pending_approval") {
       throw new BadRequestException(`当前状态不可驳回结束: ${order.status}`);

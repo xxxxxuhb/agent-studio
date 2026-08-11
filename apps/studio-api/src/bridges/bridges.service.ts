@@ -133,44 +133,168 @@ export class BridgesService implements OnModuleInit {
     );
   }
 
+  private idleListeners: Array<(bridge: BridgeExecutor) => void> = [];
+
+  /** Work-order queue admission hooks when an executor leaves busy → online. */
+  onExecutorIdle(listener: (bridge: BridgeExecutor) => void) {
+    this.idleListeners.push(listener);
+  }
+
+  private notifyExecutorIdle(previous: BridgeExecutor, next: BridgeExecutor) {
+    if (previous.status !== "busy" || next.status !== "online") return;
+    for (const listener of this.idleListeners) {
+      try {
+        listener(next);
+      } catch (err) {
+        // Keep status sync resilient; admission failures are logged by callers.
+        console.warn(
+          `[bridges] idle listener failed for ${next.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
   /**
-   * Prefer an online/busy registered executor's public base_url for Studio→Bridge HTTP.
+   * Prefer a registered executor's public base_url for Studio→Bridge HTTP.
    * Optional teamId scopes to that team; otherwise any reachable executor.
    */
   async pickRegisteredBaseUrl(opts?: {
     teamId?: string;
+    /** When true, only idle `online` executors (for admitting new runs). */
+    preferIdle?: boolean;
   }): Promise<string | undefined> {
     const preferred = await this.pickRegisteredExecutor(opts);
     return preferred?.base_url?.replace(/\/$/, "") || undefined;
   }
 
-  /** Online/busy executor for a team (busy still counts as reachable mid-run). */
+  /**
+   * Pick a registered executor.
+   * - Team scope is strict: never another team's Bridge (unscoped/empty team_id allowed as shared).
+   * - Prefers `online` over `busy` unless only busy remain (and preferIdle is false).
+   */
   async pickRegisteredExecutor(opts?: {
     teamId?: string;
+    preferIdle?: boolean;
   }): Promise<BridgeExecutor | undefined> {
     const teamId = (opts?.teamId || "").trim();
-    const candidates = (await this.list()).filter((b) => {
+    let candidates = (await this.list()).filter((b) => {
       if (b.status !== "online" && b.status !== "busy") return false;
       if (!b.base_url?.trim()) return false;
-      if (teamId && (b.team_id || "").trim() && b.team_id !== teamId) {
-        return false;
-      }
       return true;
     });
-    return teamId
-      ? candidates.find((b) => (b.team_id || "").trim() === teamId) ||
-          candidates[0]
-      : candidates[0];
+
+    if (teamId) {
+      const exact = candidates.filter(
+        (b) => (b.team_id || "").trim() === teamId,
+      );
+      const unscoped = candidates.filter((b) => !(b.team_id || "").trim());
+      candidates = exact.length ? exact : unscoped;
+    }
+
+    if (opts?.preferIdle) {
+      candidates = candidates.filter((b) => b.status === "online");
+    } else {
+      const idle = candidates.filter((b) => b.status === "online");
+      if (idle.length) candidates = idle;
+    }
+
+    // list() is sorted by last_seen_at desc — keep that order for soft RR among peers.
+    return candidates[0];
+  }
+
+  /**
+   * Resolve Bridge URL for a new work-order start.
+   * Prefer idle registered executors; report busy_pool when the team only has busy hosts.
+   */
+  async resolveForNewRun(opts?: {
+    teamId?: string;
+    override?: string;
+    configured?: string;
+  }): Promise<
+    | { ok: true; studioBaseUrl: string; registeredBaseUrl?: string }
+    | { ok: false; reason: "busy_pool" | "unreachable"; message: string }
+  > {
+    const override = (opts?.override || "").trim().replace(/\/$/, "");
+    if (override) {
+      return { ok: true, studioBaseUrl: override };
+    }
+
+    const idleUrl = await this.pickRegisteredBaseUrl({
+      teamId: opts?.teamId,
+      preferIdle: true,
+    });
+    if (idleUrl) {
+      return {
+        ok: true,
+        studioBaseUrl: idleUrl,
+        registeredBaseUrl: idleUrl,
+      };
+    }
+
+    const busy = await this.pickRegisteredExecutor({
+      teamId: opts?.teamId,
+      preferIdle: false,
+    });
+    if (busy?.status === "busy") {
+      return {
+        ok: false,
+        reason: "busy_pool",
+        message:
+          "团队 Bridge 均在执行中，工单将排队等待空闲执行器（也可稍后点「重新执行」）",
+      };
+    }
+
+    const configured = (opts?.configured || "").trim().replace(/\/$/, "");
+    if (!configured) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        message:
+          "无可用 Bridge：请启动执行器并完成 WS 注册，或在团队设置填写 bridge_base_url",
+      };
+    }
+
+    const health = await this.probeBridgeHealthDetail(configured);
+    if (!health.ok) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        message: `Bridge 不可达（${configured}/health）。请启动 Bridge 或确认已注册在线执行器`,
+      };
+    }
+    if (health.status === "busy") {
+      return {
+        ok: false,
+        reason: "busy_pool",
+        message:
+          "配置的 Bridge 正忙，工单将排队等待空闲（也可稍后点「重新执行」）",
+      };
+    }
+    return { ok: true, studioBaseUrl: configured };
   }
 
   /**
    * Fail fast before workspace ensure / Dify start when Bridge looks unreachable.
+   * Mid-run helpers may pass preferIdle=false so busy hosts still count as reachable.
    */
   async requireReachableBaseUrl(opts?: {
     teamId?: string;
     override?: string;
     configured?: string;
+    preferIdle?: boolean;
   }): Promise<{ studioBaseUrl: string; registeredBaseUrl?: string }> {
+    if (opts?.preferIdle) {
+      const resolved = await this.resolveForNewRun(opts);
+      if (!resolved.ok) {
+        throw new BadRequestException(resolved.message);
+      }
+      return {
+        studioBaseUrl: resolved.studioBaseUrl,
+        registeredBaseUrl: resolved.registeredBaseUrl,
+      };
+    }
+
     const override = (opts?.override || "").trim().replace(/\/$/, "");
     const registered = await this.pickRegisteredBaseUrl({
       teamId: opts?.teamId,
@@ -198,15 +322,29 @@ export class BridgesService implements OnModuleInit {
   }
 
   async probeBridgeHealth(baseUrl: string): Promise<boolean> {
+    const detail = await this.probeBridgeHealthDetail(baseUrl);
+    return detail.ok;
+  }
+
+  async probeBridgeHealthDetail(
+    baseUrl: string,
+  ): Promise<{ ok: boolean; status?: string }> {
     const base = baseUrl.replace(/\/$/, "");
     try {
       const res = await fetch(`${base}/health`, {
         method: "GET",
         signal: AbortSignal.timeout(3_000),
       });
-      return res.ok;
+      if (!res.ok) return { ok: false };
+      const body = (await res.json().catch(() => null)) as {
+        status?: string;
+      } | null;
+      return {
+        ok: true,
+        status: typeof body?.status === "string" ? body.status : undefined,
+      };
     } catch {
-      return false;
+      return { ok: false };
     }
   }
 
@@ -242,6 +380,7 @@ export class BridgesService implements OnModuleInit {
   ): Promise<BridgeExecutor> {
     const stamp = this.nowIso();
     const existing = await this.repo.findOne({ where: { id: bridge.id } });
+    const previous = existing ? this.toBridge(existing) : null;
     const next = BridgeExecutorSchema.parse({
       ...bridge,
       updated_at: stamp,
@@ -265,6 +404,7 @@ export class BridgesService implements OnModuleInit {
       this.realtime.publishBridge(saved);
       this.realtime.publishBridges(await this.list());
     }
+    if (previous) this.notifyExecutorIdle(previous, saved);
     return saved;
   }
 

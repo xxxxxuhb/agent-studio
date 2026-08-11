@@ -10,15 +10,18 @@ import {
   Row,
   Select,
   Space,
+  Steps,
+  Tabs,
   Tag,
   Typography,
   message,
 } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { LinkOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { RunLogEntry, RunLogMeta, RunLogSource } from "@agent-studio/agent-schema";
-import { runLogsApi } from "../api/run-logs";
+import { runLogsApi, type RunLogTraceStep } from "../api/run-logs";
 import { AgentOutputView } from "../components/AgentOutputView";
+import { RunArtifactsPanel } from "../components/RunArtifactsPanel";
 import { getSelectedTeam } from "../auth/session";
 
 const SOURCE_COLOR: Record<RunLogSource, string> = {
@@ -53,6 +56,16 @@ function truncateOneLine(text: string, max = 120) {
   return `${line.slice(0, max)}…`;
 }
 
+function traceStepStatus(
+  step: RunLogTraceStep,
+  isLast: boolean,
+): "wait" | "process" | "finish" | "error" {
+  if (step.level === "error" || step.kind === "error") return "error";
+  if (step.level === "warn" || step.kind === "warn") return "error";
+  if (isLast && step.kind !== "run_finished") return "process";
+  return "finish";
+}
+
 export function RunLogsPage() {
   const navigate = useNavigate();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
@@ -65,6 +78,7 @@ export function RunLogsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(routeRunId || null);
   const [meta, setMeta] = useState<RunLogMeta | null>(null);
   const [entries, setEntries] = useState<RunLogEntry[]>([]);
+  const [trace, setTrace] = useState<RunLogTraceStep[]>([]);
   const [source, setSource] = useState<string>("all");
   const [level, setLevel] = useState<string>("all");
   const [loading, setLoading] = useState(false);
@@ -108,13 +122,14 @@ export function RunLogsPage() {
       const res = await runLogsApi.get(runId, { source, level });
       setMeta(res.meta);
       setEntries(res.entries);
+      setTrace(res.trace || []);
       const reversed = [...res.entries].reverse();
-      // 默认展开最近一条带 body 的，否则最近一条
       const withBody = reversed.find((e) => e.body?.trim());
       setOpenKeys([(withBody || reversed[0])?.id].filter(Boolean) as string[]);
     } catch (err) {
       setMeta(null);
       setEntries([]);
+      setTrace([]);
       setOpenKeys([]);
       message.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -135,6 +150,7 @@ export function RunLogsPage() {
     if (!selectedId) {
       setMeta(null);
       setEntries([]);
+      setTrace([]);
       setOpenKeys([]);
       return;
     }
@@ -147,16 +163,39 @@ export function RunLogsPage() {
     navigate(`/logs/${id}`, { replace: true });
   }
 
+  async function jumpLookup() {
+    const needle = q.trim() || initialQ.trim();
+    if (!needle) {
+      message.info("先输入 Studio / Dify / Bridge / 工单 ID");
+      return;
+    }
+    try {
+      const hit = await runLogsApi.lookup({
+        q: needle,
+        team_id: getSelectedTeam()?.id,
+      });
+      selectRun(hit.meta.run_id);
+      message.success(
+        hit.match === "exact" ? "已定位到精确匹配运行" : "已定位到近似匹配运行",
+      );
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Space wrap>
         <Input.Search
-          placeholder="搜索 run_id / 工单 / 流水线"
+          placeholder="搜索 Studio/Dify/Bridge run、失败原因、工单…"
           allowClear
           defaultValue={initialQ}
-          style={{ width: 280 }}
+          style={{ width: 360 }}
           onSearch={setQ}
         />
+        <Button type="primary" onClick={() => void jumpLookup()}>
+          定位运行
+        </Button>
         <Button icon={<ReloadOutlined />} onClick={() => void reloadList()}>
           刷新
         </Button>
@@ -187,9 +226,39 @@ export function RunLogsPage() {
                           {item.work_order_status ? (
                             <Tag>{item.work_order_status}</Tag>
                           ) : null}
+                          {item.last_error ? (
+                            <Tag color="red">有错误</Tag>
+                          ) : null}
                         </Space>
                       }
-                      description={`${item.title || item.work_order_id} · ${item.pipeline_name || item.pipeline_id || "-"} · ${item.entry_count} 条`}
+                      description={
+                        <Space direction="vertical" size={0}>
+                          <span>
+                            {item.title || item.work_order_id} ·{" "}
+                            {item.pipeline_name || item.pipeline_id || "-"} ·{" "}
+                            {item.entry_count} 条
+                          </span>
+                          {item.dify_workflow_run_id || item.bridge_run_id ? (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {item.dify_workflow_run_id
+                                ? `Dify ${item.dify_workflow_run_id.slice(0, 10)}…`
+                                : ""}
+                              {item.dify_workflow_run_id && item.bridge_run_id
+                                ? " · "
+                                : ""}
+                              {item.bridge_run_id
+                                ? `Bridge ${item.bridge_run_id}`
+                                : ""}
+                              {item.bridge_stage ? ` / ${item.bridge_stage}` : ""}
+                            </Typography.Text>
+                          ) : null}
+                          {item.last_error ? (
+                            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                              {truncateOneLine(item.last_error, 80)}
+                            </Typography.Text>
+                          ) : null}
+                        </Space>
+                      }
                     />
                   </List.Item>
                 )}
@@ -241,7 +310,11 @@ export function RunLogsPage() {
             ) : (
               <Space direction="vertical" size={12} style={{ width: "100%" }}>
                 <Space wrap>
-                  <Tag>工单 {selected.work_order_id}</Tag>
+                  <Link to={`/work-orders?id=${encodeURIComponent(selected.work_order_id)}`}>
+                    <Tag color="blue" icon={<LinkOutlined />} style={{ cursor: "pointer" }}>
+                      工单 {selected.work_order_id}
+                    </Tag>
+                  </Link>
                   {selected.project_id ? (
                     <Tag color="cyan">项目 {selected.project_id}</Tag>
                   ) : null}
@@ -252,81 +325,171 @@ export function RunLogsPage() {
                     </Tag>
                   ))}
                 </Space>
-                <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
-                  <Typography.Text type="secondary">
-                    开始 {selected.started_at} · 更新 {selected.updated_at} ·{" "}
-                    {entries.length} 条（过滤后）
-                  </Typography.Text>
-                  {orderedEntries.length ? (
-                    <Space size={8}>
-                      <Button
-                        size="small"
-                        type="link"
-                        onClick={() => setOpenKeys(orderedEntries.map((e) => e.id))}
+                <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                  <Typography.Text type="secondary">关联 ID（可复制 / 点标签检索）</Typography.Text>
+                  <Space wrap>
+                    <Typography.Text>
+                      Studio{" "}
+                      <Typography.Text
+                        code
+                        copyable
+                        onClick={() => setQ(selected.run_id)}
+                        style={{ cursor: "pointer" }}
                       >
-                        全部展开
-                      </Button>
-                      <Button size="small" type="link" onClick={() => setOpenKeys([])}>
-                        全部折叠
-                      </Button>
-                    </Space>
+                        {selected.run_id}
+                      </Typography.Text>
+                    </Typography.Text>
+                    {selected.dify_workflow_run_id ? (
+                      <Typography.Text>
+                        Dify{" "}
+                        <Typography.Text
+                          code
+                          copyable
+                          onClick={() => setQ(selected.dify_workflow_run_id)}
+                          style={{ cursor: "pointer" }}
+                        >
+                          {selected.dify_workflow_run_id}
+                        </Typography.Text>
+                      </Typography.Text>
+                    ) : null}
+                    {selected.bridge_run_id ? (
+                      <Typography.Text>
+                        Bridge{" "}
+                        <Typography.Text
+                          code
+                          copyable
+                          onClick={() => setQ(selected.bridge_run_id)}
+                          style={{ cursor: "pointer" }}
+                        >
+                          {selected.bridge_run_id}
+                        </Typography.Text>
+                        {selected.bridge_stage ? ` / ${selected.bridge_stage}` : ""}
+                      </Typography.Text>
+                    ) : null}
+                  </Space>
+                  {selected.last_error ? (
+                    <Typography.Text type="danger">
+                      最近失败：{selected.last_error}
+                    </Typography.Text>
                   ) : null}
                 </Space>
 
-                {orderedEntries.length ? (
-                  <Collapse
-                    className="run-log-collapse"
-                    activeKey={openKeys}
-                    onChange={(keys) =>
-                      setOpenKeys(
-                        Array.isArray(keys) ? keys.map(String) : [String(keys)],
-                      )
-                    }
-                    items={orderedEntries.map((e) => ({
-                      key: e.id,
-                      label: (
-                        <div className="run-log-collapse-label">
-                          <Space wrap size={[6, 4]}>
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {new Date(e.at).toLocaleString()}
-                            </Typography.Text>
-                            <Tag color={SOURCE_COLOR[e.source]}>
-                              {SOURCE_LABEL[e.source]}
-                            </Tag>
-                            {e.level !== "info" ? (
-                              <Tag color={levelColor(e.level)}>{e.level}</Tag>
-                            ) : null}
-                            {e.step_id ? <Tag>step:{e.step_id}</Tag> : null}
-                            {e.agent ? <Tag>agent:{e.agent}</Tag> : null}
-                            {e.bridge_stage ? (
-                              <Tag>bridge:{e.bridge_stage}</Tag>
-                            ) : null}
-                            {e.body?.trim() ? <Tag color="purple">有详情</Tag> : null}
-                          </Space>
-                          <Typography.Text className="run-log-collapse-msg">
-                            {truncateOneLine(e.message)}
+                {trace.length ? (
+                  <Card size="small" type="inner" title="运行轨迹（Studio → Dify → Bridge）">
+                    <Steps
+                      size="small"
+                      direction="vertical"
+                      items={trace.map((step, idx) => ({
+                        title: step.label,
+                        description: (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {step.kind}
+                            {step.at ? ` · ${new Date(step.at).toLocaleString()}` : ""}
                           </Typography.Text>
-                        </div>
-                      ),
+                        ),
+                        status: traceStepStatus(step, idx === trace.length - 1),
+                      }))}
+                    />
+                  </Card>
+                ) : null}
+
+                <Tabs
+                  items={[
+                    {
+                      key: "entries",
+                      label: "控制面日志",
                       children: (
-                        <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                          <Typography.Paragraph
-                            style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
-                          >
-                            {e.message}
-                          </Typography.Paragraph>
-                          {e.body?.trim() ? (
-                            <Card size="small" type="inner" title="详情 / Agent 产出">
-                              <AgentOutputView output={e.body} maxHeight={320} />
-                            </Card>
-                          ) : null}
+                        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                          <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
+                            <Typography.Text type="secondary">
+                              开始 {selected.started_at} · 更新 {selected.updated_at} ·{" "}
+                              {entries.length} 条（过滤后）
+                            </Typography.Text>
+                            {orderedEntries.length ? (
+                              <Space size={8}>
+                                <Button
+                                  size="small"
+                                  type="link"
+                                  onClick={() => setOpenKeys(orderedEntries.map((e) => e.id))}
+                                >
+                                  全部展开
+                                </Button>
+                                <Button size="small" type="link" onClick={() => setOpenKeys([])}>
+                                  全部折叠
+                                </Button>
+                              </Space>
+                            ) : null}
+                          </Space>
+
+                          {orderedEntries.length ? (
+                            <Collapse
+                              className="run-log-collapse"
+                              activeKey={openKeys}
+                              onChange={(keys) =>
+                                setOpenKeys(
+                                  Array.isArray(keys) ? keys.map(String) : [String(keys)],
+                                )
+                              }
+                              items={orderedEntries.map((e) => ({
+                                key: e.id,
+                                label: (
+                                  <div className="run-log-collapse-label">
+                                    <Space wrap size={[6, 4]}>
+                                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                        {new Date(e.at).toLocaleString()}
+                                      </Typography.Text>
+                                      <Tag color={SOURCE_COLOR[e.source]}>
+                                        {SOURCE_LABEL[e.source]}
+                                      </Tag>
+                                      {e.level !== "info" ? (
+                                        <Tag color={levelColor(e.level)}>{e.level}</Tag>
+                                      ) : null}
+                                      {e.step_id ? <Tag>step:{e.step_id}</Tag> : null}
+                                      {e.agent ? <Tag>agent:{e.agent}</Tag> : null}
+                                      {e.bridge_stage ? (
+                                        <Tag>bridge:{e.bridge_stage}</Tag>
+                                      ) : null}
+                                      {e.body?.trim() ? <Tag color="purple">有详情</Tag> : null}
+                                    </Space>
+                                    <Typography.Text className="run-log-collapse-msg">
+                                      {truncateOneLine(e.message)}
+                                    </Typography.Text>
+                                  </div>
+                                ),
+                                children: (
+                                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                                    <Typography.Paragraph
+                                      style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
+                                    >
+                                      {e.message}
+                                    </Typography.Paragraph>
+                                    {e.body?.trim() ? (
+                                      <Card size="small" type="inner" title="详情 / Agent 产出">
+                                        <AgentOutputView output={e.body} maxHeight={320} />
+                                      </Card>
+                                    ) : null}
+                                  </Space>
+                                ),
+                              }))}
+                            />
+                          ) : (
+                            <Empty description="该运行暂无匹配日志" />
+                          )}
                         </Space>
                       ),
-                    }))}
-                  />
-                ) : (
-                  <Empty description="该运行暂无匹配日志" />
-                )}
+                    },
+                    {
+                      key: "artifacts",
+                      label: "Bridge 产物",
+                      children: (
+                        <RunArtifactsPanel
+                          runId={selected.run_id}
+                          bridgeRunId={selected.bridge_run_id}
+                        />
+                      ),
+                    },
+                  ]}
+                />
               </Space>
             )}
           </Card>

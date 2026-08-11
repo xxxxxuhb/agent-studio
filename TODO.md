@@ -28,24 +28,59 @@ Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远
 
 - [x] Dify Human Input / `form_token` 丢失与恢复路径加固（不误清 token、恢复失败可观测、过期重拉、decide 重试、sync 串行）。
 - [x] Bridge 掉线 / `busy` / 阶段失败后的重试与可恢复状态机（预检、Dify URL 对齐、503 admit、重连保 busy、失败标 retryable +「重新执行」；阶段中断续跑仍靠重启）。
-- [ ] Studio run_id ↔ Dify ↔ Bridge stage 统一可检索（失败原因、日志串联）。
+- [x] Studio run_id ↔ Dify ↔ Bridge stage 统一可检索（失败原因、日志串联）。
 
 ### 测试与 CI
 
-- [ ] 鉴权 + 团队隔离 API 回归。
-- [ ] 工单启动路由（选仓 / Bridge 可达）测试。
-- [ ] commit-record / MR 解析 + Bridge HTTP 鉴权回归（在现有少量 Bridge 单测之上加厚）。
+- [x] 鉴权 + 团队隔离 API 回归。
+- [x] 工单启动路由（选仓 / Bridge 可达）测试。
+- [x] commit-record / MR 解析 + Bridge HTTP 鉴权回归（在现有少量 Bridge 单测之上加厚）。
 
 ### 执行器调度
 
-- [ ] 多 Bridge 池：按团队选机、`busy` 排队（单远程主机跑通后再做）。
+- [x] 多 Bridge 池：按团队选机、`busy` 排队（优先 idle、禁止跨团队回落；全忙时 `queued`，Bridge 空闲后自动 admit）。
 
 ### 可观测与清理
 
-- [ ] run 级可观测补强（trace / 检索）。
-- [ ] 仓库工作副本与 run 产物磁盘清理策略。
+- [x] run 级可观测补强（trace / 检索：ID 精确 lookup、双向深链、运行轨迹）。
+- [x] 仓库工作副本与 run 产物磁盘清理策略（Bridge `gc` dry-run 默认；清 prompt / 终态 `docs/dify-runs` / 过期 `runs.json`）。
+
+### Web 查看 run 产物
+
+- [x] Bridge：`GET /runs/:id/artifacts` 列表 + `GET /runs/:id/artifacts/:name` 读正文；仅允许 `docs/dify-runs/{run_id}/`（或 run 登记路径）白名单，防路径穿越。
+- [x] Studio API 代理（团队鉴权）+ Web 在 RunLogs / 工单详情加「产物」Tab（列表 + markdown 预览）。
+- [ ] （可选）终态快照入库 / 落盘，Bridge 下线仍可回看。
+- [ ] （可选）有 MR/sha 时外链 GitLab blob。
+
+Notes (2026-08-11): 产物在 Bridge 机 `docs/dify-runs/{run_id}/*.md`；现 RunLogs 是控制面时间线，不直接读仓库文件。主路径走 Bridge 读 API，不做 Studio 本机扫盘。
+
+### 一键 Compose profile（减负本地栈）
+
+- [ ] 统一 `deploy/` Compose **profile**：如 `core`（仅 MySQL）/ `control`（+ 可容器化控制面）/ `full`（+ Dify + GitLab）；避免换机默认拉全套。
+- [ ] `scripts/bootstrap-dev.sh`（或等价）：拷 `.env.example`、按 profile `up -d`、等 health、跑 `init.sql`、打印下一步（Bridge/Studio 本机进程）。
+- [ ] 文档与 Skill 写清 L0–L3 / profile 对应关系；GitLab、Dify 标为 optional，完整本地闭环才用 `full`。
+
+Notes (2026-08-11): 换机最重是 Dify/GitLab 镜像与初始化；profile + bootstrap 减「忘步骤 / 配错端口」，共享远程栈仍是更瘦的日常路径。
 
 ## P2 — 扩展（可后置）
+
+### Bridge 桌面启停（Tauri）
+
+- [ ] 用 **Tauri** 做本机执行器托盘/小窗：启动、停止 Bridge；状态看 `/health`（及是否 `online`）。
+- [ ] **保留现有命令行启动**（`npm run dev:bridge` / `agent-studio-bridge start`）；App 只是在 CLI 之上的一层，spawn 同一套进程与 `.env`，不替代 CLI。
+- [ ] 停止走 SIGINT/SIGTERM（与 Ctrl+C 一致，便于 WS 报 offline）；可选「只退 UI、Bridge 继续跑」。
+- [ ] 密钥仍读本机 Bridge `.env`，不进 Tauri 云同步。
+
+Notes (2026-08-11): 面向本地调试与桌面执行机；云 VM 仍用 systemd/Docker，不必强依赖 Tauri。
+
+### 移动端独立 App（控制面）
+
+- [ ] 做**独立移动 App**（非仅响应式 Web）：登录 Studio、选团队、工单列表/详情、Human Input 通过/驳回、启动/重新执行、执行器状态、运行日志/产物只读。
+- [ ] 只调现有 Studio API +（可选）Socket.IO；**不在手机上跑 Bridge / Cursor**；执行仍依赖已 online 的远程执行器。
+- [ ] 技术选型待定（RN / Flutter / Tauri Mobile 等）；与桌面 Tauri 启停 App 职责分离（手机遥控控制面，桌面管本机 Bridge 进程）。
+- [ ] 前提：Studio API 对公网/VPN 可达 + HTTPS；推送通知（审批待办）可选后置。
+
+Notes (2026-08-11): 移动端 = 远程操作台，不是移动版执行器。
 
 ### 身份
 
@@ -54,7 +89,7 @@ Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远
 ### Agent 驱动
 
 - [ ] `openai` driver（今日占位）；按「无 Cursor 许可」需求决定是否做。
-- [ ] Trae / Qoder 安装与鉴权文档压实。
+- [x] Trae / Qoder 安装与鉴权文档压实（`docs/环境配置指南.md` §3.1a + `.env.example` / Bridge·runtime README）。
 
 ### Cloud Dify Agent as step executor
 
@@ -66,7 +101,7 @@ Notes (2026-08-10): UI `dify.agent_id` / `agent_name` 仍是元数据；工单�
 
 ### 工程债（顺手）
 
-- [ ] 继续拆 `work-orders` god service（routing / dify utils 已抽一部分）。
+- [x] 继续拆 `work-orders` god service（routing / dify utils / bridge-git 解析已抽；服务仍偏大，可继续拆 sync/decide）。
 
 ---
 

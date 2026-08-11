@@ -184,22 +184,18 @@ export function readCommitRecord(filePath: string): CommitRecord | null {
   }
 }
 
-function parseOriginRemote(repoPath: string): RemoteInfo | null {
-  let raw = "";
-  try {
-    raw = git(repoPath, ["remote", "get-url", "origin"]).trim();
-  } catch {
-    return null;
-  }
-  if (!raw) return null;
+/** Parse a git origin URL into forge API targets (used before opening MR/PR). */
+export function parseOriginRemoteUrl(raw: string): RemoteInfo | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
 
   let host = "";
   let projectPath = "";
-  const ssh = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/i);
-  const sshUrl = raw.match(
+  const ssh = trimmed.match(/^git@([^:]+):(.+?)(?:\.git)?$/i);
+  const sshUrl = trimmed.match(
     /^ssh:\/\/([^@]+)@([^/:]+)(?::(\d+))?\/(.+?)(?:\.git)?$/i,
   );
-  const http = raw.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?\/?$/i);
+  const http = trimmed.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?\/?$/i);
   if (ssh) {
     host = ssh[1];
     projectPath = ssh[2].replace(/^\/+/, "");
@@ -213,7 +209,7 @@ function parseOriginRemote(repoPath: string): RemoteInfo | null {
     return {
       kind: "unknown",
       apiBase: "",
-      projectPath: raw,
+      projectPath: trimmed,
       webBase: "",
     };
   }
@@ -243,6 +239,16 @@ function parseOriginRemote(repoPath: string): RemoteInfo | null {
     projectPath,
     webBase,
   };
+}
+
+function parseOriginRemote(repoPath: string): RemoteInfo | null {
+  let raw = "";
+  try {
+    raw = git(repoPath, ["remote", "get-url", "origin"]).trim();
+  } catch {
+    return null;
+  }
+  return parseOriginRemoteUrl(raw);
 }
 
 async function httpJson(

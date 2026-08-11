@@ -2,6 +2,7 @@
 
 export const STATUS_LABEL: Record<string, { color: string; text: string }> = {
   draft: { color: "default", text: "草稿" },
+  queued: { color: "processing", text: "排队中" },
   running: { color: "processing", text: "运行中" },
   pending_approval: { color: "warning", text: "待确认" },
   completed: { color: "success", text: "已完成" },

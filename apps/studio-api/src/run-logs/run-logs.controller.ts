@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Get,
   Inject,
+  NotFoundException,
   Param,
   Query,
 } from "@nestjs/common";
@@ -34,6 +35,29 @@ export class RunLogsController {
     });
   }
 
+  /** Paste Studio / Dify / Bridge / work-order id → one run (exact preferred). */
+  @Get("lookup")
+  async lookup(
+    @CurrentUser() user: RequestUser,
+    @Query("q") q?: string,
+    @Query("team_id") team_id?: string,
+  ) {
+    const needle = (q || "").trim();
+    if (!needle) {
+      throw new NotFoundException("lookup requires q");
+    }
+    const teamIds = await this.teams.resolveScopedTeamIds(user.id, team_id);
+    const hit = await this.logs.lookup({ q: needle, team_ids: teamIds });
+    if (!hit) {
+      throw new NotFoundException(`no run log matches: ${needle}`);
+    }
+    const teamId = (hit.meta.team_id || "").trim();
+    if (teamId) {
+      await this.teams.requireMember(teamId, user.id);
+    }
+    return hit;
+  }
+
   @Get(":runId")
   async get(
     @CurrentUser() user: RequestUser,
@@ -42,15 +66,40 @@ export class RunLogsController {
     @Query("level") level?: string,
   ) {
     const detail = await this.logs.get(runId, { source, level });
-    const teamId = (detail.meta.team_id || "").trim();
+    await this.assertTeamAccess(user.id, detail.meta.team_id);
+    return detail;
+  }
+
+  @Get(":runId/artifacts")
+  async listArtifacts(
+    @CurrentUser() user: RequestUser,
+    @Param("runId") runId: string,
+  ) {
+    const detail = await this.logs.get(runId);
+    await this.assertTeamAccess(user.id, detail.meta.team_id);
+    return this.logs.listArtifacts(runId);
+  }
+
+  @Get(":runId/artifacts/:name")
+  async readArtifact(
+    @CurrentUser() user: RequestUser,
+    @Param("runId") runId: string,
+    @Param("name") name: string,
+  ) {
+    const detail = await this.logs.get(runId);
+    await this.assertTeamAccess(user.id, detail.meta.team_id);
+    return this.logs.readArtifact(runId, name);
+  }
+
+  private async assertTeamAccess(userId: string, teamIdRaw: string) {
+    const teamId = (teamIdRaw || "").trim();
     if (teamId) {
-      await this.teams.requireMember(teamId, user.id);
-      return detail;
+      await this.teams.requireMember(teamId, userId);
+      return;
     }
-    const mine = await this.teams.listTeamIdsForUser(user.id);
+    const mine = await this.teams.listTeamIdsForUser(userId);
     if (!mine.length) {
       throw new ForbiddenException("你不是任何团队成员");
     }
-    return detail;
   }
 }

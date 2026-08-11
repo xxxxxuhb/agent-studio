@@ -76,7 +76,7 @@ Bridge **不内嵌模型调用**；阶段执行委托给 `@agent-studio/agent-ru
 | GET/POST/PUT/PATCH/DELETE | `/api/digital-humans...` | 数字人 CRUD |
 | GET/POST/PUT/PATCH/DELETE | `/api/pipelines...` | 流水线 CRUD |
 | GET/POST/PUT/DELETE | `/api/projects...` | 项目 / 多仓 / clone |
-| GET | `/api/run-logs` | 运行日志列表（按 run_id） |
+| GET | `/api/run-logs` | 运行日志列表（`q` 可搜 Studio/Dify/Bridge run、失败摘要、工单标题） |
 | GET | `/api/run-logs/:runId` | 某次运行的全部日志 |
 | GET/POST/DELETE | `/api/bridges...` | 执行器注册 / 心跳 / 列表 |
 | GET/PUT/POST | `/api/work-orders...` | 工单 / 启动 / 重启 / 同步 Dify |

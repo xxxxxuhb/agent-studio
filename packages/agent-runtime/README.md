@@ -20,6 +20,17 @@ AGENT_DRIVER=trae
 AGENT_DRIVER=qoder
 ```
 
+### Install & auth (quick)
+
+| Driver | Install | Auth |
+|--------|---------|------|
+| `cursor` | bundled SDK | `CURSOR_API_KEY` or Bridge `start --login` |
+| `trae` | install `traecli` ([docs](https://docs.trae.cn/cli_login-token)); optional `TRAECLI_PATH` / `TRAECLI_HOST` | `TRAECLI_PERSONAL_ACCESS_TOKEN` (`trae-lt-…`) or interactive `/login` |
+| `qoder` | monorepo `npm install` (SDK + worker); optional `qodercli` | `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_PAT`, or `QODER_AUTH=qodercli` after CLI login |
+| `openai` | — | placeholder only |
+
+Full copy-paste recipes: `docs/环境配置指南.md` §3.1a.
+
 ## Add a custom driver
 
 ```ts

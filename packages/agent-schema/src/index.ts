@@ -161,6 +161,7 @@ export type PipelineCompose = z.infer<typeof PipelineComposeSchema>;
 
 export const WorkOrderStatusSchema = z.enum([
   "draft",
+  "queued",
   "running",
   "pending_approval",
   "completed",
@@ -342,6 +343,21 @@ export const WorkOrderRunSchema = z.object({
       bridge_run_id: z.string().optional(),
       /** True when Bridge reports dry-run / missing CURSOR_API_KEY. */
       bridge_dry_run: z.boolean().optional(),
+    })
+    .optional(),
+  /**
+   * When status=queued, holds the start payload until a team Bridge becomes idle.
+   * Cleared once the run is admitted.
+   */
+  pending_start: z
+    .object({
+      pipeline_id: z.string().min(1),
+      auto_approve: z.boolean().optional().default(false),
+      agents_md_path: z.string().optional(),
+      bridge_base_url: z.string().optional(),
+      reuse_previous_routing: z.boolean().optional().default(false),
+      enqueued_at: z.string(),
+      note: z.string().optional().default(""),
     })
     .optional(),
 });

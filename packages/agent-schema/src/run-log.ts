@@ -54,6 +54,11 @@ export const RunLogMetaSchema = z.object({
   executor: z.string().optional().default(""),
   project_id: z.string().optional().default(""),
   work_order_status: z.string().optional().default(""),
+  /** Denormalized for search / correlation UI. */
+  dify_workflow_run_id: z.string().optional().default(""),
+  bridge_run_id: z.string().optional().default(""),
+  bridge_stage: z.string().optional().default(""),
+  last_error: z.string().optional().default(""),
   started_at: z.string(),
   updated_at: z.string(),
   entry_count: z.number().int().nonnegative().default(0),

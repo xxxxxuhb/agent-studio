@@ -36,6 +36,19 @@ If `--driver` is omitted and stdin is a TTY, the CLI interactively asks you to p
 | `qoder` | Qoder Agent SDK |
 | `openai` | placeholder |
 
+## Install & auth (Trae / Qoder)
+
+Ops walkthrough: [`docs/环境配置指南.md`](../../docs/环境配置指南.md) §3.1a.
+
+| driver | Install | Auth |
+|--------|---------|------|
+| `cursor` | Cursor Agent SDK (via runtime) | `CURSOR_API_KEY` or `start --login` |
+| `trae` | `traecli` on PATH (`TRAECLI_PATH`) | `TRAECLI_PERSONAL_ACCESS_TOKEN` or `traecli` → `/login` |
+| `qoder` | monorepo `npm install` (+ optional `qodercli`) | `QODER_PERSONAL_ACCESS_TOKEN` or `QODER_AUTH=qodercli` |
+| `openai` | — | **not implemented** |
+
+Verify: `npx @agent-studio/bridge start --driver trae|qoder` then `GET /health` shows the driver.
+
 ## Stages
 
 `manager` → `requirement` → `plan` → `dev` → `review` → `test` → `release_test`

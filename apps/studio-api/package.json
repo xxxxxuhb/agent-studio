@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/work-orders/work-order-dify-utils.test.js",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\"",
     "dev": "tsc -p tsconfig.json && node dist/main.js",
     "start": "node dist/main.js",
     "seed": "tsc -p tsconfig.json && node dist/seed-cli.js"

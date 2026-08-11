@@ -9,7 +9,7 @@ import {
   isTransientDifyFailure,
   resolveDifyBridgeBase,
   shouldClearFormTokenOnRemoteStatus,
-} from "./work-order-dify-utils.js";
+} from "../../dist/work-orders/work-order-dify-utils";
 
 describe("human form / form_token helpers", () => {
   it("builds stable dify user ids", () => {
