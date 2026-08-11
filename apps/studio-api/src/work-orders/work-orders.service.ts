@@ -1,15 +1,16 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
+import { In, type FindOptionsWhere, Repository } from "typeorm";
 import {
   WorkOrderCreateSchema,
   WorkOrderDecisionSchema,
@@ -26,13 +27,14 @@ import {
 } from "@agent-studio/agent-schema";
 import { PipelinesService } from "../pipelines/pipelines.service";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
-import { bridgeAuthHeaders, bridgeHttpToken } from "../bridges/bridge-http";
+import { bridgeHttpToken } from "../bridges/bridge-http";
 import { DifyClientService } from "../dify/dify-client.service";
 import { DifyConfigService } from "../dify/dify-config.service";
 import { ProjectsService } from "../projects/projects.service";
 import { RealtimeHub } from "../realtime/realtime.hub";
 import { RunLogsService } from "../run-logs/run-logs.service";
 import { StudioConfigService } from "../studio-config/studio-config.service";
+import { TeamsService } from "../teams/teams.service";
 import {
   answersFromDefaults,
   formatOpenQuestionFeedback,
@@ -42,6 +44,7 @@ import {
   languageDirective,
   reviewCommitDirective,
 } from "./agent-output";
+import { WorkOrderEntity } from "./entities/work-order.entity";
 import {
   type BridgeStageHint,
   type ProjectRouting,
@@ -110,6 +113,9 @@ export class WorkOrdersService implements OnModuleInit {
   private readonly loggedBodies = new Set<string>();
 
   constructor(
+    @InjectRepository(WorkOrderEntity)
+    private readonly repo: Repository<WorkOrderEntity>,
+    private readonly teams: TeamsService,
     private readonly pipelines: PipelinesService,
     private readonly humans: DigitalHumansService,
     private readonly difyClient: DifyClientService,
@@ -125,11 +131,10 @@ export class WorkOrdersService implements OnModuleInit {
       process.env.STUDIO_WORKORDER_DIR ||
         path.join(process.cwd(), "data", "work-orders"),
     );
-    fs.mkdirSync(this.dataDir, { recursive: true });
   }
 
+  /** YAML dir kept for one-shot migrate / fallback reads. */
   getDataDir() {
-    fs.mkdirSync(this.dataDir, { recursive: true });
     return this.dataDir;
   }
 
@@ -139,6 +144,44 @@ export class WorkOrdersService implements OnModuleInit {
 
   private nowIso() {
     return new Date().toISOString();
+  }
+
+  private toWorkOrder(entity: WorkOrderEntity): WorkOrder {
+    return WorkOrderSchema.parse({
+      id: entity.id,
+      team_id: entity.team_id || "",
+      project_id: entity.project_id || "",
+      title: entity.title,
+      requirement: entity.requirement,
+      status: entity.status,
+      pipeline_id: entity.pipeline_id || "",
+      category: entity.category || "requirement",
+      priority: entity.priority || "medium",
+      tags: entity.tags || [],
+      clarifications: entity.clarifications || [],
+      run: entity.run ?? null,
+      created_at: entity.created_at?.toISOString?.() || undefined,
+      updated_at: entity.updated_at?.toISOString?.() || undefined,
+    });
+  }
+
+  private toEntityFields(order: WorkOrder): Partial<WorkOrderEntity> {
+    return {
+      id: order.id,
+      team_id: order.team_id || "",
+      project_id: order.project_id || "",
+      title: order.title,
+      requirement: order.requirement,
+      status: order.status,
+      pipeline_id: order.pipeline_id || "",
+      category: order.category || "requirement",
+      priority: order.priority || "medium",
+      tags: order.tags || [],
+      clarifications: order.clarifications || [],
+      run: order.run ?? null,
+      created_at: order.created_at ? new Date(order.created_at) : undefined,
+      updated_at: order.updated_at ? new Date(order.updated_at) : undefined,
+    };
   }
 
   private appendRunEvent(
@@ -194,7 +237,7 @@ export class WorkOrdersService implements OnModuleInit {
               : event.type === "info" && /选仓|总管/.test(event.message)
                 ? ("manager" as const)
                 : ("system" as const);
-    this.runLogs.log(order, {
+    void this.runLogs.log(order, {
       source,
       level: event.level === "warn" ? "warn" : event.level === "error" ? "error" : "info",
       message: event.message,
@@ -323,18 +366,18 @@ export class WorkOrdersService implements OnModuleInit {
     });
   }
 
-  list(filters?: { status?: string; q?: string }) {
-    const dir = this.getDataDir();
-    const files = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"));
-    let items = files.map((file) => {
-      const raw = fs.readFileSync(path.join(dir, file), "utf8");
-      return WorkOrderSchema.parse(YAML.parse(raw));
-    });
+  async list(filters?: {
+    status?: string;
+    q?: string;
+    team_ids?: string[];
+  }): Promise<WorkOrder[]> {
+    if (filters?.team_ids && filters.team_ids.length === 0) return [];
+    const where: FindOptionsWhere<WorkOrderEntity> = {};
+    if (filters?.team_ids) where.team_id = In(filters.team_ids);
     if (filters?.status && filters.status !== "all") {
-      items = items.filter((w) => w.status === filters.status);
+      where.status = filters.status;
     }
+    let items = (await this.repo.find({ where })).map((e) => this.toWorkOrder(e));
     if (filters?.q?.trim()) {
       const needle = filters.q.trim().toLowerCase();
       items = items.filter(
@@ -345,45 +388,164 @@ export class WorkOrdersService implements OnModuleInit {
           w.tags.some((t) => t.toLowerCase().includes(needle)),
       );
     }
-    return items.sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    return items.sort((a, b) =>
+      (b.updated_at || "").localeCompare(a.updated_at || ""),
+    );
   }
 
-  get(id: string): WorkOrder {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`not found: ${id}`);
-    return WorkOrderSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
+  async listForUser(
+    userId: string,
+    filters?: { status?: string; q?: string; team_id?: string },
+  ): Promise<WorkOrder[]> {
+    const scoped = await this.teams.resolveScopedTeamIds(userId, filters?.team_id);
+    return this.list({
+      status: filters?.status,
+      q: filters?.q,
+      team_ids: scoped,
+    });
   }
 
-  create(input: WorkOrderCreate): WorkOrder {
+  async get(id: string): Promise<WorkOrder> {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException(`not found: ${id}`);
+    return this.toWorkOrder(entity);
+  }
+
+  async getForUser(userId: string, id: string): Promise<WorkOrder> {
+    const order = await this.get(id);
+    if (!(await this.userCanAccessWorkOrder(userId, order))) {
+      throw new NotFoundException(`not found: ${id}`);
+    }
+    return order;
+  }
+
+  async requireWritableWorkOrder(
+    userId: string,
+    id: string,
+  ): Promise<WorkOrder> {
+    const order = await this.getForUser(userId, id);
+    const teamId = (order.team_id || "").trim();
+    if (!teamId) {
+      throw new ForbiddenException("工单缺少 team_id，无法校验写权限");
+    }
+    await this.teams.requireWritableMember(teamId, userId);
+    return order;
+  }
+
+  async userCanAccessWorkOrder(userId: string, order: WorkOrder): Promise<boolean> {
+    let teamId = (order.team_id || "").trim();
+    const projectId = (order.project_id || "").trim();
+    if (!teamId) {
+      // Empty project_id must NOT mean world-readable.
+      if (!projectId) return false;
+      try {
+        const project = await this.projects.getById(projectId);
+        teamId = (project.team_id || "").trim();
+      } catch {
+        return false;
+      }
+      if (!teamId) return false;
+    }
+    try {
+      await this.teams.requireMember(teamId, userId);
+    } catch {
+      return false;
+    }
+    if (projectId) {
+      return this.projects.userCanAccessProject(userId, projectId);
+    }
+    return true;
+  }
+
+  async createForUser(userId: string, input: WorkOrderCreate): Promise<WorkOrder> {
     let body: WorkOrderCreate;
     try {
       body = WorkOrderCreateSchema.parse(input);
     } catch (err) {
       throw new BadRequestException(err instanceof Error ? err.message : String(err));
     }
-    if (fs.existsSync(this.filePath(body.id))) {
+    const exists = await this.repo.findOne({ where: { id: body.id } });
+    if (exists) {
       throw new ConflictException(`already exists: ${body.id}`);
     }
-    this.assertProjectBinding(body.project_id);
+
+    let teamId = (body.team_id || "").trim();
+    const projectId = (body.project_id || "").trim();
+    if (!teamId && projectId) {
+      try {
+        const project = await this.projects.getForUser(userId, projectId);
+        teamId = project.team_id;
+      } catch {
+        throw new BadRequestException(`项目不存在或无权访问: ${projectId}`);
+      }
+    }
+    if (!teamId) {
+      throw new BadRequestException("创建工单需要 team_id（或绑定带团队的 project_id）");
+    }
+    await this.teams.requireWritableMember(teamId, userId);
+    if (projectId) {
+      await this.assertProjectBindingForUser(userId, projectId);
+      const project = await this.projects.getById(projectId);
+      if (project.team_id !== teamId) {
+        throw new BadRequestException(
+          `工单 team_id=${teamId} 与项目 team_id=${project.team_id} 不一致`,
+        );
+      }
+    }
+
     return this.write(
       WorkOrderSchema.parse({
         ...body,
+        team_id: teamId,
+        project_id: projectId,
         status: body.status || "draft",
         run: null,
       }),
     );
   }
 
-  update(id: string, patch: WorkOrderUpdate): WorkOrder {
-    const current = this.get(id);
+  async updateForUser(
+    userId: string,
+    id: string,
+    patch: WorkOrderUpdate,
+  ): Promise<WorkOrder> {
+    const current = await this.requireWritableWorkOrder(userId, id);
     if (current.status === "running" || current.status === "pending_approval") {
       throw new BadRequestException("流水线进行中，无法编辑工单正文；请先结束或完成当前运行");
     }
     try {
       const parsed = WorkOrderUpdateSchema.parse(patch);
       if (parsed.project_id !== undefined) {
-        this.assertProjectBinding(parsed.project_id);
+        await this.assertProjectBindingForUser(userId, parsed.project_id);
       }
+      const merged = WorkOrderSchema.parse({
+        ...current,
+        ...parsed,
+        id,
+        team_id: current.team_id,
+        run: current.run,
+        status: current.status === "draft" ? current.status : current.status,
+      });
+      return this.write(merged);
+    } catch (err) {
+      if (
+        err instanceof BadRequestException ||
+        err instanceof ForbiddenException ||
+        err instanceof NotFoundException
+      ) {
+        throw err;
+      }
+      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async update(id: string, patch: WorkOrderUpdate): Promise<WorkOrder> {
+    const current = await this.get(id);
+    if (current.status === "running" || current.status === "pending_approval") {
+      throw new BadRequestException("流水线进行中，无法编辑工单正文；请先结束或完成当前运行");
+    }
+    try {
+      const parsed = WorkOrderUpdateSchema.parse(patch);
       const merged = WorkOrderSchema.parse({
         ...current,
         ...parsed,
@@ -398,20 +560,25 @@ export class WorkOrdersService implements OnModuleInit {
     }
   }
 
-  remove(id: string) {
-    const current = this.get(id);
+  async remove(id: string) {
+    const current = await this.get(id);
     if (current.status === "running" || current.status === "pending_approval") {
       throw new BadRequestException("流水线进行中，无法删除");
     }
-    fs.unlinkSync(this.filePath(id));
+    await this.repo.delete({ id });
     return { ok: true as const, id };
   }
 
+  async removeForUser(userId: string, id: string) {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.remove(id);
+  }
+
   /** Append clarification note; allowed even while pipeline is running. */
-  clarify(id: string, note: string): WorkOrder {
+  async clarify(id: string, note: string): Promise<WorkOrder> {
     const text = note.trim();
     if (!text) throw new BadRequestException("澄清内容不能为空");
-    const order = this.get(id);
+    const order = await this.get(id);
     const stamp = this.nowIso();
     const clarifications = [...(order.clarifications || []), { at: stamp, note: text }];
     const requirement = `${order.requirement.trim()}\n\n## 澄清补充（${stamp}）\n${text}`;
@@ -422,15 +589,30 @@ export class WorkOrdersService implements OnModuleInit {
     });
   }
 
+  async clarifyForUser(userId: string, id: string, note: string): Promise<WorkOrder> {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.clarify(id, note);
+  }
+
   /** Jump back to a previous/named step and re-run (manager rework). */
-  rework(_id: string, _stepId: string, _feedback = ""): WorkOrder {
+  async rework(_id: string, _stepId: string, _feedback = ""): Promise<WorkOrder> {
     throw new BadRequestException(
       "暂不支持 Studio 返工；请在 Dify 控制台处理，或「同步 Dify」后重新执行",
     );
   }
 
-  describeStatus(id: string): string {
-    const order = this.get(id);
+  async reworkForUser(
+    userId: string,
+    id: string,
+    stepId: string,
+    feedback = "",
+  ): Promise<WorkOrder> {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.rework(id, stepId, feedback);
+  }
+
+  async describeStatus(id: string): Promise<string> {
+    const order = await this.get(id);
     const lines = [
       `工单：${order.title} (\`${order.id}\`)`,
       `状态：${order.status}`,
@@ -469,11 +651,28 @@ export class WorkOrdersService implements OnModuleInit {
     return lines.join("\n");
   }
 
-  private assertProjectBinding(projectId?: string) {
+  private async assertProjectBindingForUser(
+    userId: string,
+    projectId?: string,
+  ) {
     const id = (projectId || "").trim();
     if (!id) return;
     try {
-      const project = this.projects.get(id);
+      const project = await this.projects.getForUser(userId, id);
+      if (!project.enabled) {
+        throw new BadRequestException(`项目已停用: ${id}`);
+      }
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException(`项目不存在或无权访问: ${id}`);
+    }
+  }
+
+  private async assertProjectBinding(projectId?: string) {
+    const id = (projectId || "").trim();
+    if (!id) return;
+    try {
+      const project = await this.projects.getById(id);
       if (!project.enabled) {
         throw new BadRequestException(`项目已停用: ${id}`);
       }
@@ -545,14 +744,14 @@ export class WorkOrdersService implements OnModuleInit {
       };
     }
 
-    const project = this.projects.get(projectId);
+    const project = await this.projects.getById(projectId);
     if (!project.enabled || !project.repos.length) return null;
 
-    const cloned = await this.projects.ensureCloned(projectId);
+    const cloned = await this.projects.ensureCloned(null, projectId);
     const ready = cloned.repos.filter((r) => r.clone_status === "ready");
     if (!ready.length) return null;
 
-    const catalog = this.projects.catalogForManager(projectId);
+    const catalog = await this.projects.catalogForManager(null, projectId);
     const selectable = catalog.repos.filter((r) =>
       ready.some((x) => x.id === r.id),
     );
@@ -619,7 +818,7 @@ export class WorkOrdersService implements OnModuleInit {
 
   async start(id: string, input: unknown): Promise<WorkOrder> {
     const body = WorkOrderStartSchema.parse(input);
-    const order = this.get(id);
+    const order = await this.get(id);
     if (order.status === "running" || order.status === "pending_approval") {
       throw new BadRequestException(
         "工单已有进行中的流水线。请先点「结束运行」，或对总管说「驳回结束」后再启动。",
@@ -723,13 +922,18 @@ export class WorkOrdersService implements OnModuleInit {
     });
   }
 
+  async startForUser(userId: string, id: string, input: unknown): Promise<WorkOrder> {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.start(id, input);
+  }
+
   /**
    * End the current run if active, then start a new one.
    * Defaults pipeline/executor from the last run — for soft-failed Dify runs, Bridge 503, etc.
    */
   async restart(id: string, input: unknown = {}): Promise<WorkOrder> {
     const body = WorkOrderRestartSchema.parse(input ?? {});
-    const order = this.get(id);
+    const order = await this.get(id);
     const pipeline_id =
       body.pipeline_id?.trim() ||
       order.run?.pipeline_id ||
@@ -750,7 +954,7 @@ export class WorkOrdersService implements OnModuleInit {
     }
 
     // After rejectAndEnd the in-memory order is stale; reload so we can reuse routing.
-    const latest = this.get(id);
+    const latest = await this.get(id);
     return this.start(id, {
       pipeline_id,
       executor,
@@ -763,6 +967,15 @@ export class WorkOrdersService implements OnModuleInit {
       // Default: reuse last manager plan (skip slow Cursor /routing/select).
       reuse_previous_routing: !body.reselect_repos,
     });
+  }
+
+  async restartForUser(
+    userId: string,
+    id: string,
+    input: unknown = {},
+  ): Promise<WorkOrder> {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.restart(id, input);
   }
 
   /** Call Dify first, then persist — avoids stuck running without remote binding. */
@@ -778,7 +991,9 @@ export class WorkOrdersService implements OnModuleInit {
     const cfg = this.difyConfig.get();
     const pipeline = this.pipelines.get(draft.run!.pipeline_id);
     const auth = this.difyConfig.resolveAuthForPipeline(pipeline);
-    const language = this.studioConfig.language();
+    const language = this.studioConfig.languageForTeam(
+      draft.team_id || previous.team_id || "",
+    );
     const user = `work-order:${draft.id}`;
 
     const agentManifest = pipeline.steps.map((s) => {
@@ -983,10 +1198,10 @@ export class WorkOrdersService implements OnModuleInit {
         message: `运行结束：${draft.status}${started.error ? ` · ${started.error}` : ""}`,
         dify_status: started.status,
       });
-      return this.write(draft);
+      return await this.write(draft);
     }
 
-    const saved = this.write(draft);
+    const saved = await this.write(draft);
     if (saved.status === "completed") {
       saved.run!.finished_at = this.nowIso();
       this.appendRunEvent(saved, {
@@ -1050,7 +1265,7 @@ export class WorkOrdersService implements OnModuleInit {
   }
 
   async syncDify(id: string): Promise<WorkOrder> {
-    const order = this.get(id);
+    const order = await this.get(id);
     if (!order.run?.dify?.workflow_run_id) {
       throw new BadRequestException("该工单没有绑定 Dify run");
     }
@@ -1066,7 +1281,7 @@ export class WorkOrdersService implements OnModuleInit {
       detail = await this.difyClient.getRun(workflowRunId, auth);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return this.noteDifySyncRetry(order, msg);
+      return await this.noteDifySyncRetry(order, msg);
     }
 
     // Only keep local end for explicit cancel/reject. A false "completed"
@@ -1097,7 +1312,7 @@ export class WorkOrdersService implements OnModuleInit {
         message: `同步时保留本地结束状态（${order.status}），忽略远端 ${detail.status}`,
         dify_status: order.run.dify.status,
       });
-      return this.write(order);
+      return await this.write(order);
     }
 
     const prevStatus = dify.status;
@@ -1267,8 +1482,14 @@ export class WorkOrdersService implements OnModuleInit {
       });
     }
 
-    const saved = this.write(order);
+    const saved = await this.write(order);
     return this.maybeAutoApproveHumanGate(saved);
+  }
+
+  async syncDifyForUser(userId: string, id: string): Promise<WorkOrder> {
+    // Sync is a mutating side-effect on remote/local run state — viewers cannot.
+    await this.requireWritableWorkOrder(userId, id);
+    return this.syncDify(id);
   }
 
   /**
@@ -1306,7 +1527,7 @@ export class WorkOrdersService implements OnModuleInit {
         : "自动确认";
       if (questions.length) {
         try {
-          this.clarify(order.id, feedback);
+          await this.clarify(order.id, feedback);
         } catch {
           /* ignore clarify write failures during auto-approve */
         }
@@ -1319,13 +1540,13 @@ export class WorkOrdersService implements OnModuleInit {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`auto-approve failed for ${order.id}: ${msg}`);
       try {
-        const cur = this.get(order.id);
+        const cur = await this.get(order.id);
         this.appendRunEvent(cur, {
           type: "info",
           level: "warn",
           message: `自动确认失败，仍需人工确认：${msg}`,
         });
-        return this.write(cur);
+        return await this.write(cur);
       } catch {
         return order;
       }
@@ -1335,9 +1556,12 @@ export class WorkOrdersService implements OnModuleInit {
   }
 
   /** Persist a sync error without failing the work order (keeps running). */
-  noteDifySyncRetry(orderOrId: string | WorkOrder, message: string): WorkOrder {
+  async noteDifySyncRetry(
+    orderOrId: string | WorkOrder,
+    message: string,
+  ): Promise<WorkOrder> {
     const order =
-      typeof orderOrId === "string" ? this.get(orderOrId) : orderOrId;
+      typeof orderOrId === "string" ? await this.get(orderOrId) : orderOrId;
     if (!order.run?.dify) {
       throw new BadRequestException("该工单没有绑定 Dify run");
     }
@@ -1368,14 +1592,19 @@ export class WorkOrdersService implements OnModuleInit {
       order.status = "running";
       order.run.finished_at = undefined;
     }
-    return this.write(order);
+    return await this.write(order);
   }
 
   async decide(id: string, input: unknown): Promise<WorkOrder> {
     const body = WorkOrderDecisionSchema.parse(input);
-    const order = this.get(id);
+    const order = await this.get(id);
     if (!order.run) throw new BadRequestException("工单尚未启动流水线");
     return this.decideDify(id, body);
+  }
+
+  async decideForUser(userId: string, id: string, input: unknown): Promise<WorkOrder> {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.decide(id, input);
   }
 
   private async decideDify(
@@ -1387,7 +1616,7 @@ export class WorkOrdersService implements OnModuleInit {
       inputs?: Record<string, unknown>;
     },
   ): Promise<WorkOrder> {
-    let order = this.get(id);
+    let order = await this.get(id);
     if (order.status !== "pending_approval" && order.run?.dify?.status !== "paused") {
       throw new BadRequestException("当前没有待确认的 Dify Human Input");
     }
@@ -1417,7 +1646,7 @@ export class WorkOrdersService implements OnModuleInit {
       dify_status: dify.status,
       detail: { node: dify.form_node_title },
     });
-    this.write(order);
+    await this.write(order);
 
     await this.difyClient.submitHumanInputForm({
       formToken: dify.form_token,
@@ -1427,7 +1656,7 @@ export class WorkOrdersService implements OnModuleInit {
       auth: this.authForOrder(order),
     });
 
-    order = this.get(id);
+    order = await this.get(id);
     if (order.run?.dify) {
       order.run.dify.form_token = null;
       order.run.dify.form_content = undefined;
@@ -1463,7 +1692,7 @@ export class WorkOrdersService implements OnModuleInit {
       } else {
         order.status = "running";
       }
-      this.write(order);
+      await this.write(order);
     }
 
     // Give Dify a moment, then sync
@@ -1597,7 +1826,7 @@ export class WorkOrdersService implements OnModuleInit {
         }
       }
       run.current_step_index = Math.max(0, steps.length - 1);
-      this.runLogs.log(order, {
+      void this.runLogs.log(order, {
         source: "pipeline",
         message: "流水线全部步骤已完成（Dify succeeded）",
         event_type: "run_finished",
@@ -1615,7 +1844,7 @@ export class WorkOrdersService implements OnModuleInit {
         cur.finished_at = this.nowIso();
         cur.output_title = cur.output_title || order.run?.dify?.form_node_title || cur.label;
         cur.output = this.buildDifyStepOutput(order);
-        this.runLogs.log(order, {
+        void this.runLogs.log(order, {
           source: "pipeline",
           level: "error",
           message: cur.summary,
@@ -1682,7 +1911,7 @@ export class WorkOrdersService implements OnModuleInit {
         order.run?.dify?.form_node_title || cur.output_title || cur.label;
       cur.output = this.buildDifyStepOutput(order);
       if (prevStatus !== "pending_approval") {
-        this.runLogs.log(order, {
+        void this.runLogs.log(order, {
           source: "pipeline",
           message: `流水线步骤 ${cur.label || cur.step_id} → 待确认`,
           step_id: cur.step_id,
@@ -1695,7 +1924,7 @@ export class WorkOrdersService implements OnModuleInit {
       const formKey = `${order.run?.run_id}:form:${form.length}:${form.slice(0, 80)}`;
       if (form && !this.loggedBodies.has(formKey)) {
         this.loggedBodies.add(formKey);
-        this.runLogs.log(order, {
+        void this.runLogs.log(order, {
           source: "agent",
           message: order.run?.dify?.form_node_title || "Dify Human Input / Agent 产出",
           body: form,
@@ -1713,7 +1942,7 @@ export class WorkOrdersService implements OnModuleInit {
         order.run?.dify?.form_node_title || cur.output_title || cur.label;
       cur.output = this.buildDifyStepOutput(order);
       if (prevStatus !== "running") {
-        this.runLogs.log(order, {
+        void this.runLogs.log(order, {
           source: "pipeline",
           message: `流水线步骤 ${cur.label || cur.step_id} → 执行中`,
           body: cur.output || "",
@@ -1773,7 +2002,7 @@ export class WorkOrdersService implements OnModuleInit {
 
   /** Force-end current run and stop the active Dify workflow when present. */
   async rejectAndEnd(id: string, feedback = ""): Promise<WorkOrder> {
-    const order = this.get(id);
+    const order = await this.get(id);
     if (!order.run) throw new BadRequestException("工单尚未启动流水线");
     if (order.status !== "running" && order.status !== "pending_approval") {
       throw new BadRequestException(`当前状态不可驳回结束: ${order.status}`);
@@ -1837,7 +2066,16 @@ export class WorkOrdersService implements OnModuleInit {
       }`,
       dify_status: "stopped",
     });
-    return this.write(order);
+    return await this.write(order);
+  }
+
+  async rejectAndEndForUser(
+    userId: string,
+    id: string,
+    feedback = "",
+  ): Promise<WorkOrder> {
+    await this.requireWritableWorkOrder(userId, id);
+    return this.rejectAndEnd(id, feedback);
   }
 
   /**
@@ -1846,9 +2084,9 @@ export class WorkOrdersService implements OnModuleInit {
    */
   private async finishCurrentRepoAndContinue(order: WorkOrder): Promise<WorkOrder> {
     const prepared = this.markCurrentRepoCompleted(order);
-    if (prepared.done) return this.write(prepared.order);
+    if (prepared.done) return await this.write(prepared.order);
 
-    const saved = this.write(prepared.order);
+    const saved = await this.write(prepared.order);
     return this.startDifyFromDraft(saved, saved, {
       agents_md_path: saved.run?.selected_agents_md_path,
       routing_mode: "explicit",
@@ -1955,20 +2193,20 @@ export class WorkOrdersService implements OnModuleInit {
     return { order, done: false };
   }
 
-  private write(order: WorkOrder): WorkOrder {
+  private async write(order: WorkOrder): Promise<WorkOrder> {
     const stamp = this.nowIso();
-    const existing = fs.existsSync(this.filePath(order.id)) ? this.get(order.id) : null;
+    const existing = await this.repo.findOne({ where: { id: order.id } });
     const next = WorkOrderSchema.parse({
       ...order,
-      created_at: order.created_at || existing?.created_at || stamp,
+      created_at:
+        order.created_at || existing?.created_at?.toISOString?.() || stamp,
       updated_at: stamp,
     });
-    fs.writeFileSync(
-      this.filePath(next.id),
-      `# Agent Studio work order\n${YAML.stringify(next, { lineWidth: 100 })}`,
-      "utf8",
-    );
-    this.runLogs.touchFromOrder(next);
+    if (!next.team_id?.trim()) {
+      throw new BadRequestException("work order team_id is required");
+    }
+    await this.repo.save(this.toEntityFields(next) as WorkOrderEntity);
+    await this.runLogs.touchFromOrder(next);
     this.realtime.publishWorkOrder(next);
     return next;
   }

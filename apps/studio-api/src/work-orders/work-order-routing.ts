@@ -40,7 +40,7 @@ export async function prepareProjectRouting(
     };
   }
 
-  const project = deps.projects.get(projectId);
+  const project = await deps.projects.getById(projectId);
   if (!project.enabled) {
     throw new BadRequestException(`项目已停用: ${projectId}`);
   }
@@ -48,7 +48,7 @@ export async function prepareProjectRouting(
     throw new BadRequestException(`项目 ${projectId} 未配置任何 git 仓库`);
   }
 
-  const cloned = await deps.projects.ensureCloned(projectId);
+  const cloned = await deps.projects.ensureCloned(null, projectId);
   const failed = cloned.repos.filter((r) => r.clone_status === "error");
   const ready = cloned.repos.filter((r) => r.clone_status === "ready");
   if (!ready.length) {
@@ -57,7 +57,7 @@ export async function prepareProjectRouting(
     );
   }
 
-  const catalog = deps.projects.catalogForManager(projectId);
+  const catalog = await deps.projects.catalogForManager(null, projectId);
   const selectable = catalog.repos.filter((r) =>
     ready.some((x) => x.id === r.id),
   );

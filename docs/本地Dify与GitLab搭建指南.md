@@ -1,11 +1,10 @@
 # 本地 Dify 与 GitLab 搭建指南（小白向）
 
-目标：**本机把 GitLab、Dify 跑通，并接到 Agent Studio**。不绑定某台机器上的目录名；compose / Dify 装在哪由你自定。
+目标：**用仓库里的 Compose 把 GitLab、Dify、MySQL 跑通，并接到 Agent Studio**。
 
 Studio 的 `.env`、SSH bot、Cursor Key 见：[环境配置指南.md](./环境配置指南.md)。  
-Agent 侧流程见项目 Skill：`skills/local-stack-setup/`。
-
-> Agent Studio **不内置** GitLab / Dify 镜像。两套服务需另起，端口建议按下表对齐。
+Compose 总览：[`deploy/README.md`](../deploy/README.md)。  
+Agent 流程：Skill [`skills/local-stack-setup/`](../skills/local-stack-setup/)。
 
 ---
 
@@ -15,15 +14,17 @@ Agent 侧流程见项目 Skill：`skills/local-stack-setup/`。
 浏览器
   ├─ Agent Studio Web  :5173
   ├─ Agent Studio API  :8790
+  ├─ MySQL (Docker)    :3316   ← deploy/mysql
   ├─ Bridge            :8787
-  ├─ Dify              :80
-  └─ GitLab            :8929   （SSH 映射 :2224）
+  ├─ Dify              :80     ← deploy/dify
+  └─ GitLab            :8929   ← deploy/gitlab（SSH :2224）
 ```
 
 | 调用方 | 访问 | 地址 |
 |--------|------|------|
 | 浏览器 | Dify | `http://localhost` |
 | 浏览器 | GitLab | `http://localhost:8929` |
+| Studio API | MySQL | `127.0.0.1:3316` |
 | Studio API | Dify App API | `http://localhost/v1` |
 | Dify 容器内 HTTP 节点 | Bridge | **`http://host.docker.internal:8787`** |
 | 本机 curl | Bridge | `http://127.0.0.1:8787` |
@@ -39,53 +40,37 @@ Agent 侧流程见项目 Skill：`skills/local-stack-setup/`。
 - Docker Desktop（或等价环境）
 - 端口空闲：
 
-| 端口 | 服务 |
-|------|------|
-| 80 | Dify |
-| 8929 | GitLab HTTP |
-| 2224 | GitLab SSH → 容器 22 |
-| 8787 | Bridge |
-| 8790 | Studio API |
-| 5173 | Studio Web |
+| 端口 | 服务 | Compose |
+|------|------|---------|
+| **3316** | MySQL | `deploy/mysql/docker-compose.yml` |
+| 80 | Dify | `deploy/dify/` |
+| 8929 | GitLab HTTP | `deploy/gitlab/docker-compose.yml` |
+| 2224 | GitLab SSH | 同上 |
+| 8787 | Bridge | 本机 npm |
+| 8790 | Studio API | 本机 npm |
+| 5173 | Studio Web | 本机 npm |
 
 ```bash
-lsof -nP -iTCP:80,8929,2224,8787,8790 -sTCP:LISTEN
+lsof -nP -iTCP:80,3316,8929,2224,8787,8790,5173 -sTCP:LISTEN
 ```
 
 ---
 
-## 2. GitLab
-
-在**任意目录**放 `docker-compose.yml`：
-
-```yaml
-services:
-  gitlab:
-    image: gitlab/gitlab-ce:latest
-    container_name: gitlab
-    hostname: localhost
-    restart: unless-stopped
-    environment:
-      GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://localhost:8929'
-        nginx['listen_port'] = 8929
-        nginx['listen_https'] = false
-        gitlab_rails['gitlab_shell_ssh_port'] = 2224
-        puma['worker_processes'] = 2
-        sidekiq['max_concurrency'] = 10
-        prometheus_monitoring['enable'] = false
-    ports:
-      - "8929:8929"
-      - "2224:22"
-    volumes:
-      - ./config:/etc/gitlab
-      - ./logs:/var/log/gitlab
-      - ./data:/var/opt/gitlab
-    shm_size: "256m"
-```
+## 2. MySQL
 
 ```bash
-docker compose up -d
+docker compose -f deploy/mysql/docker-compose.yml up -d
+mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
+```
+
+细节：[环境配置指南.md §1.1](./环境配置指南.md)。
+
+---
+
+## 3. GitLab
+
+```bash
+docker compose -f deploy/gitlab/docker-compose.yml up -d
 curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:8929/-/health   # 期望 200
 ```
 
@@ -94,10 +79,10 @@ curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:8929/-/health   # 期
 初始 root 密码：
 
 ```bash
-docker exec -it gitlab grep 'Password:' /etc/gitlab/initial_root_password
+docker exec -it agent-studio-gitlab grep 'Password:' /etc/gitlab/initial_root_password
 ```
 
-登录后改密码。在 UI 建空白项目，记下 HTTP clone URL，填进 Studio「项目」的 `remote_url`。每个业务仓根目录需要 `AGENTS.md`。
+登录后改密码。在 UI 建空白项目，记下 clone URL，填进 Studio「项目」的 `remote_url`。每个业务仓根目录需要 `AGENTS.md`。
 
 机器人 SSH / PAT：见 [环境配置指南.md §4](./环境配置指南.md)。
 
@@ -111,32 +96,35 @@ git ls-remote ssh://git@localhost:2224/<group>/<repo>.git HEAD
 
 ---
 
-## 3. Dify
+## 4. Dify
 
-使用官方发布包里的 `docker` 目录（版本自选）：
+仓库已 vendored **Dify 1.16.1** 官方 `docker/`（见 `deploy/dify/DIFY_VERSION`）：
 
 ```bash
-cd <你的-dify-docker目录>
-cp .env.example .env   # 若还没有
-# 先改必改项，再：
+cd deploy/dify
+cp .env.example .env
+cat .env.agent-studio.example >> .env
+# 编辑 .env：把 SECRET_KEY 改成 `openssl rand -base64 42` 的结果
 docker compose up -d
+cd ../..
 ```
 
 浏览器：http://localhost → 注册管理员。
 
-### 必改 `.env`
+### 必改项（已写在 `.env.agent-studio.example`）
 
 ```env
 SECRET_KEY=<openssl rand -base64 42 生成>
 SSRF_PROXY_ALLOW_PRIVATE_DOMAINS=host.docker.internal
-# 按需：
-# SSRF_PROXY_ALLOW_PRIVATE_IPS=192.168.65.2,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
+SSRF_PROXY_ALLOW_PRIVATE_IPS=192.168.65.2,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
 APP_MAX_EXECUTION_TIME=7200
 ```
 
 - `SECRET_KEY` 为空 → 登录后协作 WS /「同步数据」401  
 - 改完重建相关服务，并清掉浏览器 localhost 站点数据后重登  
 - SSRF 不放行 → HTTP 节点访问 Bridge 被拦  
+
+`docker-compose.override.yml` 已为容器加上 `host.docker.internal:host-gateway`。
 
 ### Bridge 地址
 
@@ -152,28 +140,26 @@ APP_MAX_EXECUTION_TIME=7200
 创建或导入 Workflow，复制 App Key（`app-...`）。
 
 - **设置页**：启用 Dify，`api_base=http://localhost/v1`，填 Key，`bridge_base_url=http://host.docker.internal:8787`  
-- 或写 `apps/studio-api/.env` 的 `DIFY_*`（见环境配置指南）
-
-配置会落到 `apps/studio-api/data/dify-config.yaml`（含密钥，勿提交）。
+- 或写 `apps/studio-api/.env` 的 `DIFY_*`
 
 ---
 
-## 4. 推荐启动顺序
+## 5. 推荐启动顺序
 
 1. Docker 已开  
-2. GitLab compose up  
-3. Dify compose up  
-4. Agent Studio：API / Web / Bridge（改 `.env` 后重启对应进程）  
-5. 健康检查：GitLab、Dify、`8787/health`、`8790/api/health`、Web  
+2. `deploy/mysql` up + `init.sql`  
+3. `deploy/gitlab` up  
+4. `deploy/dify` up  
+5. Agent Studio：API / Web / Bridge（改 `.env` 后重启对应进程）  
+6. 健康检查：MySQL、GitLab、Dify、`8787/health`、`8790/api/health`、Web 登录选团队  
 
 同一时刻只跑 **一个** Bridge 占用 `:8787`。
 
-Bridge 日志期望：`git bot identity: ...; ssh_key=true; prefer_ssh=true`（若已配 Git bot）。
-
 ---
 
-## 5. 检查清单
+## 6. 检查清单
 
+- [ ] MySQL `:3316` + `SHOW TABLES FROM agent_studio`  
 - [ ] GitLab `http://localhost:8929` 可登录  
 - [ ] SSH `2224` 对目标仓 `git ls-remote` 成功（若要用 push）  
 - [ ] `GITLAB_TOKEN` 可调 `/api/v4/user`（若要开 MR）  

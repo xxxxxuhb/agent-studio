@@ -54,6 +54,8 @@ export const ProjectSchema = z.object({
   id: z
     .string()
     .regex(/^[a-z][a-z0-9_-]*$/, "project id must be snake_case"),
+  /** Owning team (tenant). Required for MySQL-backed projects. */
+  team_id: z.string().min(1),
   name: z.string().min(1),
   description: z.string().optional().default(""),
   /**
@@ -80,5 +82,6 @@ export type ProjectCreate = z.infer<typeof ProjectCreateSchema>;
 
 export const ProjectUpdateSchema = ProjectCreateSchema.partial().omit({
   id: true,
+  team_id: true,
 });
 export type ProjectUpdate = z.infer<typeof ProjectUpdateSchema>;

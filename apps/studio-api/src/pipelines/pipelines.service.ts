@@ -22,6 +22,7 @@ import {
 } from "@agent-studio/agent-schema";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
 import { DifyConfigService } from "../dify/dify-config.service";
+import { TeamsService } from "../teams/teams.service";
 import { bridgeAuthHeaders } from "../bridges/bridge-http";
 import { DEFAULT_PIPELINES, composePipelineFromPrompt } from "./defaults";
 
@@ -41,6 +42,7 @@ export class PipelinesService implements OnModuleInit {
   constructor(
     private readonly humans: DigitalHumansService,
     private readonly difyConfig: DifyConfigService,
+    private readonly teams: TeamsService,
   ) {}
 
   onModuleInit() {
@@ -81,6 +83,20 @@ export class PipelinesService implements OnModuleInit {
     }
   }
 
+  private inScopedTeams(teamId: string | undefined, scoped: string[]) {
+    const tid = (teamId || "").trim();
+    if (!tid) return false;
+    return scoped.includes(tid);
+  }
+
+  private async assertReadable(userId: string, pipeline: Pipeline) {
+    const tid = (pipeline.team_id || "").trim();
+    if (!tid) {
+      throw new NotFoundException(`not found: ${pipeline.id}`);
+    }
+    await this.teams.requireMember(tid, userId);
+  }
+
   list(filters?: { enabled?: "true" | "false" | "all"; q?: string }) {
     const dir = this.getDataDir();
     const files = fs
@@ -107,6 +123,24 @@ export class PipelinesService implements OnModuleInit {
     return items.sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  async listForUser(
+    userId: string,
+    filters?: {
+      enabled?: "true" | "false" | "all";
+      q?: string;
+      team_id?: string;
+    },
+  ) {
+    const scoped = await this.teams.resolveScopedTeamIds(
+      userId,
+      filters?.team_id,
+    );
+    if (!scoped.length) return [];
+    return this.list(filters).filter((p) =>
+      this.inScopedTeams(p.team_id, scoped),
+    );
+  }
+
   get(id: string): Pipeline {
     const fp = this.filePath(id);
     if (!fs.existsSync(fp)) throw new NotFoundException(`not found: ${id}`);
@@ -115,6 +149,18 @@ export class PipelinesService implements OnModuleInit {
 
   getPublic(id: string) {
     return this.toPublic(this.get(id));
+  }
+
+  async getPublicForUser(userId: string, id: string) {
+    const pipeline = this.get(id);
+    await this.assertReadable(userId, pipeline);
+    return this.toPublic(pipeline);
+  }
+
+  async getForUser(userId: string, id: string): Promise<Pipeline> {
+    const pipeline = this.get(id);
+    await this.assertReadable(userId, pipeline);
+    return pipeline;
   }
 
   /** Redact api_key for API responses. */
@@ -147,6 +193,21 @@ export class PipelinesService implements OnModuleInit {
     return this.toPublic(this.write(body as Pipeline));
   }
 
+  async createForUser(userId: string, input: PipelineCreate): Promise<PipelinePublic> {
+    let body: PipelineCreate;
+    try {
+      body = PipelineCreateSchema.parse(input);
+    } catch (err) {
+      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+    }
+    const teamId = (body.team_id || "").trim();
+    if (!teamId) {
+      throw new BadRequestException("team_id is required");
+    }
+    await this.teams.requireWritableMember(teamId, userId);
+    return this.create({ ...body, team_id: teamId });
+  }
+
   update(id: string, patch: PipelineUpdate): PipelinePublic {
     const current = this.get(id);
     try {
@@ -163,6 +224,7 @@ export class PipelinesService implements OnModuleInit {
         ...current,
         ...parsed,
         id,
+        team_id: current.team_id,
         source: { ...current.source, ...(parsed.source || {}) },
         defaults: { ...current.defaults, ...(parsed.defaults || {}) },
         steps: parsed.steps || current.steps,
@@ -176,8 +238,30 @@ export class PipelinesService implements OnModuleInit {
     }
   }
 
+  async updateForUser(
+    userId: string,
+    id: string,
+    patch: PipelineUpdate,
+  ): Promise<PipelinePublic> {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.update(id, patch);
+  }
+
   setEnabled(id: string, enabled: boolean): PipelinePublic {
     return this.toPublic(this.write({ ...this.get(id), enabled }));
+  }
+
+  async setEnabledForUser(
+    userId: string,
+    id: string,
+    enabled: boolean,
+  ): Promise<PipelinePublic> {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.setEnabled(id, enabled);
   }
 
   remove(id: string) {
@@ -187,7 +271,14 @@ export class PipelinesService implements OnModuleInit {
     return { ok: true as const, id };
   }
 
-  seedDefaults() {
+  async removeForUser(userId: string, id: string) {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.remove(id);
+  }
+
+  seedDefaults(teamId = "") {
     const imported: string[] = [];
     const skipped: string[] = [];
     for (const item of DEFAULT_PIPELINES) {
@@ -197,7 +288,7 @@ export class PipelinesService implements OnModuleInit {
       }
       try {
         this.assertAgentsExist(item.steps);
-        this.write(PipelineSchema.parse(item));
+        this.write(PipelineSchema.parse({ ...item, team_id: teamId || "" }));
         imported.push(item.id);
       } catch (err) {
         throw new BadRequestException(
@@ -206,6 +297,13 @@ export class PipelinesService implements OnModuleInit {
       }
     }
     return { imported, skipped, total: this.list().length, dataDir: this.getDataDir() };
+  }
+
+  async seedDefaultsForUser(userId: string, teamId: string) {
+    const tid = (teamId || "").trim();
+    if (!tid) throw new BadRequestException("team_id is required");
+    await this.teams.requireWritableMember(tid, userId);
+    return this.seedDefaults(tid);
   }
 
   async compose(input: unknown) {
@@ -247,6 +345,7 @@ export class PipelinesService implements OnModuleInit {
 
     if (body.id) draft.id = body.id;
     if (body.name) draft.name = body.name;
+    if (body.team_id) draft.team_id = body.team_id;
     // Ensure NL provenance
     draft.source = {
       kind: "nl",
@@ -273,6 +372,23 @@ export class PipelinesService implements OnModuleInit {
       generated_by: generatedBy,
       ...agentMeta,
     };
+  }
+
+  async composeForUser(userId: string, input: unknown) {
+    const body = PipelineComposeSchema.parse(input);
+    if (body.save) {
+      const teamId = (body.team_id || "").trim();
+      if (!teamId) {
+        throw new BadRequestException("team_id is required when save=true");
+      }
+      await this.teams.requireWritableMember(teamId, userId);
+      return this.compose({ ...body, team_id: teamId });
+    }
+    // Draft-only: still scope team_id if provided (membership check optional for preview)
+    if (body.team_id?.trim()) {
+      await this.teams.assertTeamAccess(body.team_id.trim(), userId);
+    }
+    return this.compose(body);
   }
 
   private async tryComposeViaBridge(prompt: string): Promise<

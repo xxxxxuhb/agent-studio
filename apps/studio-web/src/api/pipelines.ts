@@ -5,7 +5,7 @@ import type {
 } from "@agent-studio/agent-schema";
 
 export const pipelinesApi = {
-  list(params: { q?: string; enabled?: string }) {
+  list(params: { q?: string; enabled?: string; team_id?: string }) {
     return get<{ items: PipelinePublic[]; total: number }>("/pipelines", { params });
   },
   get(id: string) {
@@ -23,10 +23,20 @@ export const pipelinesApi = {
   remove(id: string) {
     return del<{ ok: boolean; id: string }>(`/pipelines/${id}`);
   },
-  seedDefaults() {
-    return post<{ imported: string[]; skipped: string[]; total: number }>("/seed/pipelines");
+  seedDefaults(team_id?: string) {
+    return post<{ imported: string[]; skipped: string[]; total: number }>(
+      "/seed/pipelines",
+      undefined,
+      { params: { team_id } },
+    );
   },
-  compose(body: { prompt: string; id?: string; name?: string; save?: boolean }) {
+  compose(body: {
+    prompt: string;
+    id?: string;
+    name?: string;
+    save?: boolean;
+    team_id?: string;
+  }) {
     return post<{
       draft: PipelineCreate | PipelinePublic;
       saved: boolean;

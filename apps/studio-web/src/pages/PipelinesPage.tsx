@@ -27,6 +27,7 @@ import {
 import type { DigitalHuman, PipelineCreate, PipelinePublic, PipelineStep } from "@agent-studio/agent-schema";
 import { digitalHumansApi } from "../api/digital-humans";
 import { pipelinesApi } from "../api/pipelines";
+import { getSelectedTeam } from "../auth/session";
 
 type EditorValues = {
   id: string;
@@ -93,9 +94,10 @@ export function PipelinesPage() {
   async function reload(keepId?: string | null) {
     setLoading(true);
     try {
+      const teamId = getSelectedTeam()?.id;
       const [pipelines, humanList] = await Promise.all([
-        pipelinesApi.list({ q, enabled }),
-        digitalHumansApi.list({ enabled: "all" }),
+        pipelinesApi.list({ q, enabled, team_id: teamId }),
+        digitalHumansApi.list({ enabled: "all", team_id: teamId }),
       ]);
       setItems(pipelines.items);
       setTotal(pipelines.total);
@@ -183,6 +185,7 @@ export function PipelinesPage() {
       const values = await form.validateFields();
       const payload: PipelineCreate = {
         id: values.id.trim(),
+        team_id: getSelectedTeam()?.id || "",
         name: values.name.trim(),
         description: (values.description || "").trim(),
         enabled: values.enabled,
@@ -229,6 +232,7 @@ export function PipelinesPage() {
       const result = await pipelinesApi.compose({
         prompt: composePrompt.trim(),
         save,
+        team_id: getSelectedTeam()?.id,
       });
       setComposeOpen(false);
       const by =
@@ -267,8 +271,9 @@ export function PipelinesPage() {
             <Button
               icon={<ReloadOutlined />}
               onClick={async () => {
-                await digitalHumansApi.seedDefaults();
-                const r = await pipelinesApi.seedDefaults();
+                const teamId = getSelectedTeam()?.id;
+                await digitalHumansApi.seedDefaults(teamId);
+                const r = await pipelinesApi.seedDefaults(teamId);
                 message.success(
                   `导入 ${r.imported.length}，跳过 ${r.skipped.length}，共 ${r.total}`,
                 );

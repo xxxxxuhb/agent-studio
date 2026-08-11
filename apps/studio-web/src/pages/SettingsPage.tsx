@@ -14,6 +14,7 @@ import {
 import type { DifyConfigPublic, StudioLanguage } from "@agent-studio/agent-schema";
 import { difyApi, type DifyConfigUpdate } from "../api/dify";
 import { settingsApi } from "../api/settings";
+import { getSelectedTeam } from "../auth/session";
 
 export function SettingsPage() {
   const [form] = Form.useForm<DifyConfigUpdate & { console_password?: string }>();
@@ -25,12 +26,19 @@ export function SettingsPage() {
   const [healthMsg, setHealthMsg] = useState<string | null>(null);
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
 
+  function requireTeamId() {
+    const id = getSelectedTeam()?.id;
+    if (!id) throw new Error("请先选择团队");
+    return id;
+  }
+
   async function reload() {
     setLoading(true);
     try {
+      const team_id = requireTeamId();
       const [cfg, studio] = await Promise.all([
-        difyApi.getConfig(),
-        settingsApi.get(),
+        difyApi.getConfig({ team_id }),
+        settingsApi.get({ team_id }),
       ]);
       setConfig(cfg);
       setLanguage(studio.language);
@@ -61,7 +69,10 @@ export function SettingsPage() {
   async function saveLanguage(next: StudioLanguage) {
     setSavingLang(true);
     try {
-      const studio = await settingsApi.update({ language: next });
+      const studio = await settingsApi.update(
+        { language: next },
+        { team_id: requireTeamId() },
+      );
       setLanguage(studio.language);
       message.success(
         studio.language === "zh"
@@ -103,7 +114,9 @@ export function SettingsPage() {
       if (values.console_token?.trim()) {
         payload.console_token = values.console_token.trim();
       }
-      const next = await difyApi.updateConfig(payload);
+      const next = await difyApi.updateConfig(payload, {
+        team_id: requireTeamId(),
+      });
       setConfig(next);
       form.setFieldValue("api_key", "");
       form.setFieldValue("console_token", "");
@@ -129,11 +142,14 @@ export function SettingsPage() {
         return;
       }
       setLoggingIn(true);
-      const res = await difyApi.consoleLogin({
-        email,
-        password,
-        console_base: values.console_base?.trim() || undefined,
-      });
+      const res = await difyApi.consoleLogin(
+        {
+          email,
+          password,
+          console_base: values.console_base?.trim() || undefined,
+        },
+        { team_id: requireTeamId() },
+      );
       setConfig(res.config);
       form.setFieldValue("console_password", "");
       form.setFieldValue("console_email", res.config.console_email || email);
@@ -153,7 +169,7 @@ export function SettingsPage() {
 
   async function checkHealth() {
     try {
-      const res = await difyApi.health();
+      const res = await difyApi.health({ team_id: requireTeamId() });
       setHealthOk(res.ok);
       setHealthMsg(
         res.ok

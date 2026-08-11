@@ -1,6 +1,14 @@
 import "reflect-metadata";
+import path from "node:path";
+import { config as loadEnv } from "dotenv";
+
+// Load apps/studio-api/.env whether started from monorepo root or package cwd
+loadEnv({ path: path.resolve(process.cwd(), ".env") });
+loadEnv({ path: path.resolve(process.cwd(), "apps/studio-api/.env") });
+
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import { BootstrapService } from "./database/bootstrap.service";
 import { DigitalHumansService } from "./digital-humans/digital-humans.service";
 import { PipelinesService } from "./pipelines/pipelines.service";
 
@@ -15,8 +23,11 @@ async function bootstrap() {
     ].filter(Boolean),
   });
 
+  const boot = app.get(BootstrapService);
+  const defaultTeamId = await boot.resolveDefaultTeamId();
+
   const humans = app.get(DigitalHumansService);
-  const seeded = humans.seedDefaults();
+  const seeded = humans.seedDefaults(defaultTeamId);
   if (seeded.imported.length) {
     console.log(`seeded/imported digital humans: ${seeded.imported.join(", ")}`);
   }
@@ -26,8 +37,13 @@ async function bootstrap() {
 
   const pipelines = app.get(PipelinesService);
   if (pipelines.list().length === 0) {
-    const seeded = pipelines.seedDefaults();
-    console.log(`seeded ${seeded.imported.length} pipelines`);
+    const seededPipes = pipelines.seedDefaults(defaultTeamId);
+    console.log(`seeded ${seededPipes.imported.length} pipelines`);
+  }
+
+  // Re-stamp in case seed created files after BootstrapService.onModuleInit.
+  if (defaultTeamId) {
+    boot.stampEmptyYamlTeamIds(defaultTeamId);
   }
 
   const port = Number(process.env.STUDIO_API_PORT || 8790);

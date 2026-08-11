@@ -2,7 +2,7 @@ import type { DigitalHuman, DigitalHumanCreate } from "@agent-studio/agent-schem
 import { del, get, patch, post, put } from "../http";
 
 export const digitalHumansApi = {
-  list(params: { q?: string; role?: string; enabled?: string }) {
+  list(params: { q?: string; role?: string; enabled?: string; team_id?: string }) {
     return get<{ items: DigitalHuman[]; total: number }>("/digital-humans", { params });
   },
   create(body: DigitalHumanCreate) {
@@ -17,7 +17,11 @@ export const digitalHumansApi = {
   remove(id: string) {
     return del<{ ok: boolean; id: string }>(`/digital-humans/${id}`);
   },
-  seedDefaults() {
-    return post<{ imported: string[]; skipped: string[]; total: number }>("/seed/defaults");
+  seedDefaults(team_id?: string) {
+    return post<{ imported: string[]; skipped: string[]; total: number }>(
+      "/seed/defaults",
+      undefined,
+      { params: { team_id } },
+    );
   },
 };

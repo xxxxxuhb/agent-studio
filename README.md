@@ -27,23 +27,32 @@ examples/demo-repo     示例 AGENTS.md 目标仓
 npm install
 npm run build:schema
 npm run build:runtime
+
+# MySQL（必做，Docker）
+docker compose -f deploy/mysql/docker-compose.yml up -d
+mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
+
+# 复制并编辑环境变量
+cp apps/studio-api/.env.example apps/studio-api/.env
+cp apps/studio-bridge/.env.example apps/studio-bridge/.env
+
 npm run dev:api      # 终端 1
 npm run dev:web      # 终端 2
 npm run dev:bridge   # 终端 3（Dify 执行需要）
 ```
 
+- MySQL：`127.0.0.1:3316`（容器 `agent-studio-mysql`）
 - API：http://127.0.0.1:8790/api/health  
-- 管理台：http://127.0.0.1:5173  
+- 管理台：http://127.0.0.1:5173 （登录 → 选团队）  
 - Bridge：http://127.0.0.1:8787/health  
-
-复制 `apps/studio-bridge/.env.example` → `apps/studio-bridge/.env`，按需设置 `CURSOR_API_KEY` / `AGENT_DRIVER`。
 
 更完整的本地搭建与环境变量说明：
 
 - [docs/环境配置指南.md](docs/环境配置指南.md)
 - [docs/本地Dify与GitLab搭建指南.md](docs/本地Dify与GitLab搭建指南.md)
 - [docs/架构与时序图.md](docs/架构与时序图.md)
-- 项目 Skill：[skills/local-stack-setup/](skills/local-stack-setup/)
+- 项目 Skill：[skills/local-stack-setup/](skills/local-stack-setup/)（含 [mysql.md](skills/local-stack-setup/mysql.md)）
+- Docker Compose：[`deploy/`](deploy/)（MySQL / GitLab / Dify）
 
 ## Agent 驱动切换
 

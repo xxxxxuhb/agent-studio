@@ -1,0 +1,5 @@
+.env
+volumes/
+*.env
+!*.env.example
+!.env.agent-studio.example

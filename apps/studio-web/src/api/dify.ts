@@ -26,18 +26,19 @@ export type DifyConsoleLoginResult = {
 };
 
 export const difyApi = {
-  getConfig() {
-    return get<DifyConfigPublic>("/dify/config");
+  getConfig(params: { team_id: string }) {
+    return get<DifyConfigPublic>("/dify/config", { params });
   },
-  updateConfig(body: DifyConfigUpdate) {
-    return put<DifyConfigPublic>("/dify/config", body);
+  updateConfig(body: DifyConfigUpdate, params: { team_id: string }) {
+    return put<DifyConfigPublic>("/dify/config", body, { params });
   },
-  consoleLogin(body: DifyConsoleLoginBody) {
-    return post<DifyConsoleLoginResult>("/dify/console/login", body);
+  consoleLogin(body: DifyConsoleLoginBody, params: { team_id: string }) {
+    return post<DifyConsoleLoginResult>("/dify/console/login", body, { params });
   },
-  health() {
+  health(params: { team_id: string }) {
     return get<DifyConfigPublic & { ok: boolean; error?: string; parameters?: unknown }>(
       "/dify/health",
+      { params },
     );
   },
 };

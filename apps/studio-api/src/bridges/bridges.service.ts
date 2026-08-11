@@ -18,6 +18,7 @@ import {
   type BridgeStatus,
 } from "@agent-studio/agent-schema";
 import { RealtimeHub } from "../realtime/realtime.hub";
+import { TeamsService } from "../teams/teams.service";
 
 function shellQuote(value: string): string {
   if (/^[a-zA-Z0-9._/:@%+=-]+$/.test(value)) return value;
@@ -29,7 +30,10 @@ export class BridgesService implements OnModuleInit {
   private dataDir = "";
   private expectedToken = "";
 
-  constructor(private readonly realtime: RealtimeHub) {}
+  constructor(
+    private readonly realtime: RealtimeHub,
+    private readonly teams: TeamsService,
+  ) {}
 
   onModuleInit() {
     this.dataDir = path.resolve(
@@ -50,6 +54,20 @@ export class BridgesService implements OnModuleInit {
 
   private nowIso() {
     return new Date().toISOString();
+  }
+
+  private inScopedTeams(teamId: string | undefined, scoped: string[]) {
+    const tid = (teamId || "").trim();
+    if (!tid) return false;
+    return scoped.includes(tid);
+  }
+
+  private async assertReadable(userId: string, bridge: BridgeExecutor) {
+    const tid = (bridge.team_id || "").trim();
+    if (!tid) {
+      throw new NotFoundException(`bridge not found: ${bridge.id}`);
+    }
+    await this.teams.requireMember(tid, userId);
   }
 
   assertToken(token: string) {
@@ -88,10 +106,30 @@ export class BridgesService implements OnModuleInit {
     );
   }
 
+  async listForUser(
+    userId: string,
+    filters?: { status?: string; team_id?: string },
+  ) {
+    const scoped = await this.teams.resolveScopedTeamIds(
+      userId,
+      filters?.team_id,
+    );
+    if (!scoped.length) return [];
+    return this.list(filters).filter((b) =>
+      this.inScopedTeams(b.team_id, scoped),
+    );
+  }
+
   get(id: string): BridgeExecutor {
     const fp = this.filePath(id);
     if (!fs.existsSync(fp)) throw new NotFoundException(`bridge not found: ${id}`);
     return BridgeExecutorSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
+  }
+
+  async getForUser(userId: string, id: string): Promise<BridgeExecutor> {
+    const bridge = this.get(id);
+    await this.assertReadable(userId, bridge);
+    return bridge;
   }
 
   private write(bridge: BridgeExecutor, broadcast = true): BridgeExecutor {
@@ -119,6 +157,8 @@ export class BridgesService implements OnModuleInit {
     const existing = fs.existsSync(this.filePath(id)) ? this.get(id) : null;
     return this.write({
       id,
+      // Machine auth: preserve team from prepare/bootstrap; new = "" until stamped.
+      team_id: existing?.team_id || "",
       name: body.name,
       base_url: body.base_url.replace(/\/$/, ""),
       driver: body.driver || "auto",
@@ -170,6 +210,7 @@ export class BridgesService implements OnModuleInit {
     return this.write({
       ...current,
       ...patch,
+      team_id: current.team_id,
       base_url: (patch.base_url || current.base_url).replace(/\/$/, ""),
       current_run_id:
         patch.current_run_id !== undefined
@@ -211,6 +252,13 @@ export class BridgesService implements OnModuleInit {
     return { ok: true, id };
   }
 
+  async removeForUser(userId: string, id: string) {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.remove(id);
+  }
+
   /**
    * UI “添加执行器”：预登记一条 offline 记录，并生成可复制的 npx 启动命令。
    * 执行器连上 WS 后会按 name+base_url 更新为 online。
@@ -232,6 +280,7 @@ export class BridgesService implements OnModuleInit {
     const authMode = body.auth_mode || "none";
     const bridge = this.write({
       id,
+      team_id: body.team_id,
       name: body.name,
       base_url: baseUrl,
       driver: body.driver,
@@ -290,6 +339,12 @@ export class BridgesService implements OnModuleInit {
       agent_env_key: agentEnvKey,
       token_configured: this.tokenConfigured(),
     };
+  }
+
+  async prepareForUser(userId: string, input: unknown) {
+    const body = BridgePrepareSchema.parse(input);
+    await this.teams.requireWritableMember(body.team_id, userId);
+    return this.prepare(body);
   }
 
   tokenConfigured() {

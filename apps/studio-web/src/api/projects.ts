@@ -2,7 +2,7 @@ import { del, get, post, put } from "../http";
 import type { Project, ProjectCreate, ProjectUpdate } from "@agent-studio/agent-schema";
 
 export const projectsApi = {
-  list(params: { q?: string; enabled?: string } = {}) {
+  list(params: { q?: string; enabled?: string; team_id?: string } = {}) {
     return get<{
       items: Project[];
       total: number;

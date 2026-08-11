@@ -9,6 +9,7 @@ import {
   Put,
   Query,
 } from "@nestjs/common";
+import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { ProjectsService } from "./projects.service";
 
 @Controller("projects")
@@ -18,11 +19,13 @@ export class ProjectsController {
   ) {}
 
   @Get()
-  list(
+  async list(
+    @CurrentUser() user: RequestUser,
     @Query("q") q?: string,
     @Query("enabled") enabled?: string,
+    @Query("team_id") team_id?: string,
   ) {
-    const items = this.projects.list({ q, enabled });
+    const items = await this.projects.list(user.id, { q, enabled, team_id });
     return {
       items,
       total: items.length,
@@ -31,46 +34,58 @@ export class ProjectsController {
   }
 
   @Get(":id")
-  get(@Param("id") id: string) {
-    return this.projects.get(id);
+  get(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.projects.getForUser(user.id, id);
   }
 
   @Get(":id/catalog")
-  catalog(@Param("id") id: string) {
-    return this.projects.catalogForManager(id);
+  catalog(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.projects.catalogForManager(user.id, id);
   }
 
   @Post()
-  create(@Body() body: unknown) {
-    return this.projects.create(body);
+  create(@CurrentUser() user: RequestUser, @Body() body: unknown) {
+    return this.projects.create(user.id, body);
   }
 
   @Put(":id")
-  update(@Param("id") id: string, @Body() body: unknown) {
-    return this.projects.update(id, body);
+  update(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.projects.update(user.id, id, body);
   }
 
   @Delete(":id")
-  remove(@Param("id") id: string) {
-    return this.projects.remove(id);
+  remove(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.projects.remove(user.id, id);
   }
 
   @Post(":id/repos")
-  addRepo(@Param("id") id: string, @Body() body: unknown) {
-    return this.projects.addRepo(id, body);
+  addRepo(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.projects.addRepo(user.id, id, body);
   }
 
   @Delete(":id/repos/:repoId")
-  removeRepo(@Param("id") id: string, @Param("repoId") repoId: string) {
-    return this.projects.removeRepo(id, repoId);
+  removeRepo(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Param("repoId") repoId: string,
+  ) {
+    return this.projects.removeRepo(user.id, id, repoId);
   }
 
-  /** Clone missing repos; skip when local path already has .git */
   @Post(":id/clone")
   clone(
+    @CurrentUser() user: RequestUser,
     @Param("id") id: string,
     @Body() body: { repo_ids?: string[] },
   ) {
-    return this.projects.ensureCloned(id, body?.repo_ids);
+    return this.projects.ensureCloned(user.id, id, body?.repo_ids);
   }
 }

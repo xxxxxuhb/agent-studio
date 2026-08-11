@@ -1,0 +1,32 @@
+# Agent Studio MySQL (local Docker)
+#
+#   docker compose -f deploy/mysql/docker-compose.yml up -d
+#   mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
+#
+# Host port 3316 avoids clashing with other local MySQL (3306/3307).
+# Match apps/studio-api/.env: STUDIO_MYSQL_PORT=3316 STUDIO_MYSQL_PASSWORD=123456
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: agent-studio-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: agent_studio
+    ports:
+      - "3316:3306"
+    volumes:
+      - agent_studio_mysql_data:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  agent_studio_mysql_data:

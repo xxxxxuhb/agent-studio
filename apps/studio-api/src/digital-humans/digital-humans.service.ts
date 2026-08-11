@@ -15,6 +15,7 @@ import {
   type DigitalHumanCreate,
   type DigitalHumanUpdate,
 } from "@agent-studio/agent-schema";
+import { TeamsService } from "../teams/teams.service";
 import { DEFAULT_DIGITAL_HUMANS } from "./defaults";
 
 @Injectable()
@@ -22,6 +23,8 @@ export class DigitalHumansService {
   private dataDir = path.resolve(
     process.env.STUDIO_DATA_DIR || path.join(process.cwd(), "data", "agents"),
   );
+
+  constructor(private readonly teams: TeamsService) {}
 
   getDataDir() {
     fs.mkdirSync(this.dataDir, { recursive: true });
@@ -34,6 +37,20 @@ export class DigitalHumansService {
 
   private nowIso() {
     return new Date().toISOString();
+  }
+
+  private inScopedTeams(teamId: string | undefined, scoped: string[]) {
+    const tid = (teamId || "").trim();
+    if (!tid) return false;
+    return scoped.includes(tid);
+  }
+
+  private async assertReadable(userId: string, agent: DigitalHuman) {
+    const tid = (agent.team_id || "").trim();
+    if (!tid) {
+      throw new NotFoundException(`not found: ${agent.id}`);
+    }
+    await this.teams.requireMember(tid, userId);
   }
 
   list(filters?: { enabled?: "true" | "false" | "all"; role?: string; q?: string }) {
@@ -63,10 +80,35 @@ export class DigitalHumansService {
     return items.sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  async listForUser(
+    userId: string,
+    filters?: {
+      enabled?: "true" | "false" | "all";
+      role?: string;
+      q?: string;
+      team_id?: string;
+    },
+  ) {
+    const scoped = await this.teams.resolveScopedTeamIds(
+      userId,
+      filters?.team_id,
+    );
+    if (!scoped.length) return [];
+    return this.list(filters).filter((a) =>
+      this.inScopedTeams(a.team_id, scoped),
+    );
+  }
+
   get(id: string): DigitalHuman {
     const fp = this.filePath(id);
     if (!fs.existsSync(fp)) throw new NotFoundException(`not found: ${id}`);
     return DigitalHumanSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
+  }
+
+  async getForUser(userId: string, id: string): Promise<DigitalHuman> {
+    const agent = this.get(id);
+    await this.assertReadable(userId, agent);
+    return agent;
   }
 
   create(input: DigitalHumanCreate): DigitalHuman {
@@ -82,6 +124,24 @@ export class DigitalHumansService {
     return this.write(body as DigitalHuman);
   }
 
+  async createForUser(
+    userId: string,
+    input: DigitalHumanCreate,
+  ): Promise<DigitalHuman> {
+    let body: DigitalHumanCreate;
+    try {
+      body = DigitalHumanCreateSchema.parse(input);
+    } catch (err) {
+      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+    }
+    const teamId = (body.team_id || "").trim();
+    if (!teamId) {
+      throw new BadRequestException("team_id is required");
+    }
+    await this.teams.requireWritableMember(teamId, userId);
+    return this.create({ ...body, team_id: teamId });
+  }
+
   update(id: string, patch: DigitalHumanUpdate): DigitalHuman {
     const current = this.get(id);
     try {
@@ -90,6 +150,7 @@ export class DigitalHumansService {
         ...current,
         ...parsed,
         id,
+        team_id: current.team_id,
         permissions: {
           ...current.permissions,
           ...(parsed.permissions || {}),
@@ -101,8 +162,30 @@ export class DigitalHumansService {
     }
   }
 
+  async updateForUser(
+    userId: string,
+    id: string,
+    patch: DigitalHumanUpdate,
+  ): Promise<DigitalHuman> {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.update(id, patch);
+  }
+
   setEnabled(id: string, enabled: boolean): DigitalHuman {
     return this.write({ ...this.get(id), enabled });
+  }
+
+  async setEnabledForUser(
+    userId: string,
+    id: string,
+    enabled: boolean,
+  ): Promise<DigitalHuman> {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.setEnabled(id, enabled);
   }
 
   remove(id: string) {
@@ -112,19 +195,31 @@ export class DigitalHumansService {
     return { ok: true as const, id };
   }
 
-  seedDefaults() {
+  async removeForUser(userId: string, id: string) {
+    const current = this.get(id);
+    await this.assertReadable(userId, current);
+    await this.teams.requireWritableMember(current.team_id, userId);
+    return this.remove(id);
+  }
+
+  seedDefaults(teamId = "") {
     const imported: string[] = [];
     const skipped: string[] = [];
     const upgraded: string[] = [];
     for (const item of DEFAULT_DIGITAL_HUMANS) {
       if (!fs.existsSync(this.filePath(item.id))) {
-        this.write(DigitalHumanSchema.parse(item));
+        this.write(DigitalHumanSchema.parse({ ...item, team_id: teamId || "" }));
         imported.push(item.id);
+        continue;
+      }
+      const current = this.get(item.id);
+      const currentTeam = (current.team_id || "").trim();
+      if (teamId && currentTeam && currentTeam !== teamId) {
+        skipped.push(item.id);
         continue;
       }
       // Soft-upgrade built-in agents when new permission fields appear (e.g. may_commit).
       if (item.id === "code_review") {
-        const current = this.get(item.id);
         const stillBridgeCommits =
           /由 Bridge (commit|提交)/.test(current.description || "") ||
           current.prompt_hints.some((h) =>
@@ -141,6 +236,7 @@ export class DigitalHumansService {
           this.write(
             DigitalHumanSchema.parse({
               ...current,
+              team_id: currentTeam || teamId || "",
               description: item.description,
               responsibilities: item.responsibilities,
               permissions: {
@@ -157,7 +253,6 @@ export class DigitalHumansService {
         }
       }
       if (item.id === "fullstack_dev") {
-        const current = this.get(item.id);
         const needsBranch =
           !current.prompt_hints.some((h) => /开发分支|checkout/.test(h)) ||
           !current.prompt_hints.some((h) => /灌流/.test(h));
@@ -165,6 +260,7 @@ export class DigitalHumansService {
           this.write(
             DigitalHumanSchema.parse({
               ...current,
+              team_id: currentTeam || teamId || "",
               description: item.description,
               responsibilities: item.responsibilities,
               permissions: {
@@ -187,6 +283,13 @@ export class DigitalHumansService {
       total: this.list().length,
       dataDir: this.dataDir,
     };
+  }
+
+  async seedDefaultsForUser(userId: string, teamId: string) {
+    const tid = (teamId || "").trim();
+    if (!tid) throw new BadRequestException("team_id is required");
+    await this.teams.requireWritableMember(tid, userId);
+    return this.seedDefaults(tid);
   }
 
   private write(agent: DigitalHuman): DigitalHuman {

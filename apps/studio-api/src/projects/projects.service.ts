@@ -1,30 +1,32 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import YAML from "yaml";
+import { In, Repository } from "typeorm";
 import {
   ProjectCreateSchema,
   ProjectRepoSchema,
   ProjectSchema,
   ProjectUpdateSchema,
   type Project,
-  type ProjectCreate,
   type ProjectRepo,
-  type ProjectUpdate,
 } from "@agent-studio/agent-schema";
 import {
   ensureLocalOriginSsh,
   resolveCloneRemoteUrl,
   studioGitEnv,
 } from "./git-remote";
+import { ProjectEntity } from "./entities/project.entity";
+import { TeamsService } from "../teams/teams.service";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,8 +34,6 @@ const execFileAsync = promisify(execFile);
 export function defaultStudioReposRoot(): string {
   const fromEnv = (process.env.STUDIO_REPOS_DIR || "").trim();
   if (fromEnv) return path.resolve(fromEnv);
-  // Windows: C:\.agent-studio
-  // macOS/Linux: ~/AgentStudio (under home, Finder-visible; avoid clashing with ~/agent-studio monorepo)
   if (process.platform === "win32") {
     return path.resolve("C:\\.agent-studio");
   }
@@ -42,30 +42,40 @@ export function defaultStudioReposRoot(): string {
 
 @Injectable()
 export class ProjectsService implements OnModuleInit {
-  private dataDir = "";
   private defaultReposRoot = "";
 
+  constructor(
+    @InjectRepository(ProjectEntity)
+    private readonly repo: Repository<ProjectEntity>,
+    private readonly teams: TeamsService,
+  ) {}
+
   onModuleInit() {
-    this.dataDir = path.resolve(
-      process.env.STUDIO_PROJECT_DIR ||
-        path.join(process.cwd(), "data", "projects"),
-    );
     this.defaultReposRoot = defaultStudioReposRoot();
-    fs.mkdirSync(this.dataDir, { recursive: true });
     fs.mkdirSync(this.defaultReposRoot, { recursive: true });
   }
 
-  /** Absolute default clone root (STUDIO_REPOS_DIR or OS default). */
   getDefaultReposRoot() {
     return this.defaultReposRoot;
   }
 
-  private filePath(id: string) {
-    return path.join(this.dataDir, `${id}.yaml`);
-  }
-
   private nowIso() {
     return new Date().toISOString();
+  }
+
+  private toProject(entity: ProjectEntity): Project {
+    return ProjectSchema.parse({
+      id: entity.id,
+      team_id: entity.team_id,
+      name: entity.name,
+      description: entity.description || "",
+      clone_root: entity.clone_root || "",
+      repos: entity.repos || [],
+      enabled: entity.enabled !== false,
+      tags: entity.tags || [],
+      created_at: entity.created_at?.toISOString?.() || undefined,
+      updated_at: entity.updated_at?.toISOString?.() || undefined,
+    });
   }
 
   resolveCloneRoot(project: Project): string {
@@ -90,39 +100,6 @@ export class ProjectsService implements OnModuleInit {
     return path.isAbsolute(rel) ? rel : path.join(local, rel);
   }
 
-  list(filters?: { q?: string; enabled?: string }) {
-    const files = fs
-      .readdirSync(this.dataDir)
-      .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"));
-    let items = files.map((file) =>
-      ProjectSchema.parse(
-        YAML.parse(fs.readFileSync(path.join(this.dataDir, file), "utf8")),
-      ),
-    );
-    if (filters?.enabled === "true") items = items.filter((p) => p.enabled);
-    if (filters?.enabled === "false") items = items.filter((p) => !p.enabled);
-    if (filters?.q?.trim()) {
-      const n = filters.q.trim().toLowerCase();
-      items = items.filter(
-        (p) =>
-          p.id.includes(n) ||
-          p.name.toLowerCase().includes(n) ||
-          (p.description || "").toLowerCase().includes(n),
-      );
-    }
-    return items
-      .map((p) => this.withResolvedPaths(p))
-      .sort((a, b) => a.id.localeCompare(b.id));
-  }
-
-  get(id: string): Project {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`project not found: ${id}`);
-    return this.withResolvedPaths(
-      ProjectSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8"))),
-    );
-  }
-
   private withResolvedPaths(project: Project): Project {
     const clone_root = this.resolveCloneRoot(project);
     return {
@@ -135,27 +112,107 @@ export class ProjectsService implements OnModuleInit {
     };
   }
 
-  private write(project: Project): Project {
+  async listTeamIdsForUser(userId: string) {
+    return this.teams.listTeamIdsForUser(userId);
+  }
+
+  async assertCanAccessProject(userId: string, projectId: string): Promise<Project> {
+    const project = await this.getRaw(projectId);
+    await this.teams.assertTeamAccess(project.team_id, userId);
+    return project;
+  }
+
+  async userCanAccessProject(userId: string, projectId: string): Promise<boolean> {
+    try {
+      await this.assertCanAccessProject(userId, projectId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async list(
+    userId: string,
+    filters?: { q?: string; enabled?: string; team_id?: string },
+  ) {
+    const teamIds = await this.teams.listTeamIdsForUser(userId);
+    if (!teamIds.length) return [];
+    let scoped = teamIds;
+    if (filters?.team_id) {
+      if (!teamIds.includes(filters.team_id)) {
+        throw new ForbiddenException("你不是该团队成员");
+      }
+      scoped = [filters.team_id];
+    }
+    let items = await this.repo.find({ where: { team_id: In(scoped) } });
+    let projects = items.map((e) => this.toProject(e));
+    if (filters?.enabled === "true") projects = projects.filter((p) => p.enabled);
+    if (filters?.enabled === "false") projects = projects.filter((p) => !p.enabled);
+    if (filters?.q?.trim()) {
+      const n = filters.q.trim().toLowerCase();
+      projects = projects.filter(
+        (p) =>
+          p.id.includes(n) ||
+          p.name.toLowerCase().includes(n) ||
+          (p.description || "").toLowerCase().includes(n),
+      );
+    }
+    return projects
+      .map((p) => this.withResolvedPaths(p))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async getForUser(userId: string, id: string): Promise<Project> {
+    const project = await this.assertCanAccessProject(userId, id);
+    return this.withResolvedPaths(project);
+  }
+
+  /** Load project by id without ACL (server-side orchestration). */
+  async getById(id: string): Promise<Project> {
+    return this.withResolvedPaths(await this.getRaw(id));
+  }
+
+  /** @deprecated use getForUser / getById */
+  async get(idOrUserId: string, maybeId?: string): Promise<Project> {
+    if (maybeId !== undefined) return this.getForUser(idOrUserId, maybeId);
+    return this.getById(idOrUserId);
+  }
+
+  private async getRaw(id: string): Promise<Project> {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException(`project not found: ${id}`);
+    return this.toProject(entity);
+  }
+
+  private async save(project: Project): Promise<Project> {
     const next = ProjectSchema.parse({
       ...project,
       updated_at: this.nowIso(),
       created_at: project.created_at || this.nowIso(),
     });
-    // Persist relative preference: store user-provided clone_root/local_path as given in YAML
-    fs.writeFileSync(
-      this.filePath(next.id),
-      `# Project ${next.id}\n${YAML.stringify(next, { lineWidth: 100 })}`,
-      "utf8",
-    );
+    await this.repo.save({
+      id: next.id,
+      team_id: next.team_id,
+      name: next.name,
+      description: next.description || "",
+      clone_root: next.clone_root || "",
+      repos: next.repos || [],
+      enabled: next.enabled !== false,
+      tags: next.tags || [],
+      created_at: next.created_at ? new Date(next.created_at) : new Date(),
+      updated_at: new Date(next.updated_at || Date.now()),
+    });
     return this.withResolvedPaths(next);
   }
 
-  create(input: unknown): Project {
+  async create(userId: string, input: unknown): Promise<Project> {
     const body = ProjectCreateSchema.parse(input);
-    if (fs.existsSync(this.filePath(body.id))) {
+    await this.teams.requireWritableMember(body.team_id, userId);
+    const exists = await this.repo.findOne({ where: { id: body.id } });
+    if (exists) {
       throw new ConflictException(`project already exists: ${body.id}`);
     }
-    return this.write({
+    return this.save({
       ...body,
       repos: (body.repos || []).map((r) =>
         ProjectRepoSchema.parse({ ...r, clone_status: r.clone_status || "pending" }),
@@ -164,34 +221,31 @@ export class ProjectsService implements OnModuleInit {
     });
   }
 
-  update(id: string, patch: unknown): Project {
-    const current = this.getRaw(id);
+  async update(userId: string, id: string, patch: unknown): Promise<Project> {
+    const current = await this.assertCanAccessProject(userId, id);
+    await this.teams.requireWritableMember(current.team_id, userId);
     const parsed = ProjectUpdateSchema.parse(patch);
-    return this.write(
+    return this.save(
       ProjectSchema.parse({
         ...current,
         ...parsed,
         id,
+        team_id: current.team_id,
         repos: parsed.repos ?? current.repos,
       }),
     );
   }
 
-  private getRaw(id: string): Project {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`project not found: ${id}`);
-    return ProjectSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
+  async remove(userId: string, id: string) {
+    const project = await this.assertCanAccessProject(userId, id);
+    await this.teams.requireOwner(project.team_id, userId);
+    await this.repo.delete({ id });
+    return { ok: true as const, id };
   }
 
-  remove(id: string) {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`project not found: ${id}`);
-    fs.unlinkSync(fp);
-    return { ok: true, id };
-  }
-
-  addRepo(projectId: string, input: unknown): Project {
-    const project = this.getRaw(projectId);
+  async addRepo(userId: string, projectId: string, input: unknown): Promise<Project> {
+    const project = await this.assertCanAccessProject(userId, projectId);
+    await this.teams.requireWritableMember(project.team_id, userId);
     const repo = ProjectRepoSchema.parse({
       ...(typeof input === "object" && input ? input : {}),
       clone_status: "pending",
@@ -201,27 +255,36 @@ export class ProjectsService implements OnModuleInit {
       throw new ConflictException(`repo already exists: ${repo.id}`);
     }
     project.repos.push(repo);
-    return this.write(project);
+    return this.save(project);
   }
 
-  removeRepo(projectId: string, repoId: string): Project {
-    const project = this.getRaw(projectId);
+  async removeRepo(
+    userId: string,
+    projectId: string,
+    repoId: string,
+  ): Promise<Project> {
+    const project = await this.assertCanAccessProject(userId, projectId);
+    await this.teams.requireWritableMember(project.team_id, userId);
     const next = project.repos.filter((r) => r.id !== repoId);
     if (next.length === project.repos.length) {
       throw new NotFoundException(`repo not found: ${repoId}`);
     }
     project.repos = next;
-    return this.write(project);
+    return this.save(project);
   }
 
-  /**
-   * Ensure each repo exists locally:
-   * - path exists + .git → ready (skip clone)
-   * - path missing → git clone into clone_root/repo.id
-   * - path exists but not git → error
-   */
-  async ensureCloned(projectId: string, repoIds?: string[]): Promise<Project> {
-    const project = this.getRaw(projectId);
+  async ensureCloned(
+    userId: string | null,
+    projectId: string,
+    repoIds?: string[],
+  ): Promise<Project> {
+    const project =
+      userId == null
+        ? await this.getRaw(projectId)
+        : await this.assertCanAccessProject(userId, projectId);
+    if (userId != null) {
+      await this.teams.requireWritableMember(project.team_id, userId);
+    }
     const cloneRoot = this.resolveCloneRoot(project);
     fs.mkdirSync(cloneRoot, { recursive: true });
 
@@ -258,17 +321,9 @@ export class ProjectsService implements OnModuleInit {
         const gitEnv = studioGitEnv();
         await execFileAsync(
           "git",
-          [
-            "clone",
-            "--branch",
-            branch,
-            "--single-branch",
-            cloneUrl,
-            local,
-          ],
+          ["clone", "--branch", branch, "--single-branch", cloneUrl, local],
           { timeout: 120_000, env: gitEnv },
         ).catch(async (err) => {
-          // branch may not exist remotely — retry without --branch
           const msg = err instanceof Error ? err.message : String(err);
           if (/Remote branch|not found|did not match/i.test(msg)) {
             await execFileAsync("git", ["clone", cloneUrl, local], {
@@ -300,14 +355,9 @@ export class ProjectsService implements OnModuleInit {
       }
     }
 
-    return this.write(project);
+    return this.save(project);
   }
 
-  /**
-   * Ensure AGENTS.md exists and project.repo_path points at this clone.
-   * Remote AGENTS.md often ships with a machine-specific absolute repo_path;
-   * without rewrite, Bridge writes docs/dify-runs into the wrong tree.
-   */
   private ensureAgentsMdForLocal(
     project: Project,
     repo: ProjectRepo,
@@ -324,7 +374,6 @@ export class ProjectsService implements OnModuleInit {
     this.syncAgentsMdRepoPath(agentsMd, local);
   }
 
-  /** Rewrite frontmatter `repo_path:` to the actual local clone path. */
   private syncAgentsMdRepoPath(agentsMdPath: string, localRepoPath: string) {
     const raw = fs.readFileSync(agentsMdPath, "utf8");
     if (!/^repo_path:\s*.+$/m.test(raw)) return;
@@ -382,8 +431,11 @@ Auto-generated for Studio project \`${project.id}\` / repo \`${repo.id}\`.
     fs.writeFileSync(agentsMdPath, content, "utf8");
   }
 
-  catalogForManager(projectId: string) {
-    const project = this.get(projectId);
+  async catalogForManager(userId: string | null, projectId: string) {
+    const project =
+      userId == null
+        ? await this.getById(projectId)
+        : await this.getForUser(userId, projectId);
     return {
       project_id: project.id,
       project_name: project.name,

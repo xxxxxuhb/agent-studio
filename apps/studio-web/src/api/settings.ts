@@ -6,10 +6,10 @@ export type StudioSettingsUpdate = {
 };
 
 export const settingsApi = {
-  get() {
-    return get<StudioConfig>("/settings");
+  get(params: { team_id: string }) {
+    return get<StudioConfig>("/settings", { params });
   },
-  update(body: StudioSettingsUpdate) {
-    return put<StudioConfig>("/settings", body);
+  update(body: StudioSettingsUpdate, params: { team_id: string }) {
+    return put<StudioConfig>("/settings", body, { params });
   },
 };

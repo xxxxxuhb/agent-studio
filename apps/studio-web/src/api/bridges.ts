@@ -3,6 +3,7 @@ import type { BridgeExecutor } from "@agent-studio/agent-schema";
 
 export type BridgePrepareInput = {
   name: string;
+  team_id: string;
   driver: string;
   base_url: string;
   studio_url: string;
@@ -20,7 +21,7 @@ export type BridgePrepareResult = {
 };
 
 export const bridgesApi = {
-  list(params: { status?: string } = {}) {
+  list(params: { status?: string; team_id?: string } = {}) {
     return get<{
       items: BridgeExecutor[];
       total: number;

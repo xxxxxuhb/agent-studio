@@ -1,0 +1,18 @@
+# Agent Studio local overrides (auto-merged by docker compose)
+# - Resolve host Bridge at host.docker.internal:8787 from inside Dify containers
+services:
+  api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  worker:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  worker_beat:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  plugin_daemon:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  ssrf_proxy:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

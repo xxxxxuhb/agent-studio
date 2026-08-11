@@ -39,6 +39,8 @@ export const DigitalHumanSchema = z.object({
   id: z
     .string()
     .regex(/^[a-z][a-z0-9_]*$/, "id must be snake_case starting with a letter"),
+  /** Owning team; empty = legacy / unassigned (bootstrap stamps default). */
+  team_id: z.string().optional().default(""),
   name: z.string().min(1),
   role: RoleSchema,
   description: z.string().optional().default(""),
@@ -101,6 +103,8 @@ export const PipelineSchema = z.object({
   id: z
     .string()
     .regex(/^[a-z][a-z0-9_-]*$/, "id must be kebab/snake case"),
+  /** Owning team; empty = legacy / unassigned (bootstrap stamps default). */
+  team_id: z.string().optional().default(""),
   name: z.string().min(1),
   description: z.string().optional().default(""),
   enabled: z.boolean().default(true),
@@ -150,6 +154,8 @@ export const PipelineComposeSchema = z.object({
     .optional(),
   name: z.string().optional(),
   save: z.boolean().optional().default(false),
+  /** Required when save=true (team-scoped write). */
+  team_id: z.string().optional().default(""),
 });
 export type PipelineCompose = z.infer<typeof PipelineComposeSchema>;
 
@@ -345,6 +351,8 @@ export const WorkOrderSchema = z.object({
   id: z
     .string()
     .regex(/^[a-z0-9][a-z0-9_-]*$/, "id must be lowercase alphanumeric"),
+  /** Owning team (required for ACL; derived from project when bound). */
+  team_id: z.string().optional().default(""),
   title: z.string().min(1),
   requirement: z.string().min(1),
   status: WorkOrderStatusSchema.default("draft"),
@@ -496,6 +504,36 @@ export {
   type ProjectRepoRole,
   type ProjectRepoCloneStatus,
 } from "./project";
+
+export {
+  AuthUserPublicSchema,
+  AuthLoginSchema,
+  AuthRegisterSchema,
+  AuthLoginResponseSchema,
+  type AuthUserPublic,
+  type AuthLogin,
+  type AuthRegister,
+  type AuthLoginResponse,
+} from "./auth";
+
+export {
+  TeamMemberRoleSchema,
+  TeamSchema,
+  TeamCreateSchema,
+  TeamMemberSchema,
+  TeamMemberAddSchema,
+  TeamMemberUpdateSchema,
+  TeamDetailSchema,
+  TeamListItemSchema,
+  type TeamMemberRole,
+  type Team,
+  type TeamCreate,
+  type TeamMember,
+  type TeamMemberAdd,
+  type TeamMemberUpdate,
+  type TeamDetail,
+  type TeamListItem,
+} from "./team";
 
 export {
   RunLogSourceSchema,

@@ -17,6 +17,7 @@ import {
 import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { BridgeExecutor } from "@agent-studio/agent-schema";
 import { bridgesApi, type BridgePrepareResult } from "../api/bridges";
+import { getSelectedTeam } from "../auth/session";
 import { subscribeBridges } from "../ws/bridges";
 import {
   AGENT_DRIVER_AUTH,
@@ -87,7 +88,7 @@ export function BridgesPage() {
   async function reload() {
     setLoading(true);
     try {
-      const res = await bridgesApi.list();
+      const res = await bridgesApi.list({ team_id: getSelectedTeam()?.id });
       setItems(res.items);
       setTokenConfigured(res.token_configured);
     } catch (err) {
@@ -143,8 +144,14 @@ export function BridgesPage() {
       }
 
       setSubmitting(true);
+      const teamId = getSelectedTeam()?.id;
+      if (!teamId) {
+        message.error("请先选择团队");
+        return;
+      }
       const res = await bridgesApi.prepare({
         name: values.name.trim(),
+        team_id: teamId,
         driver: values.driver,
         studio_url: values.studio_url.trim().replace(/\/$/, ""),
         base_url: values.base_url.trim().replace(/\/$/, ""),

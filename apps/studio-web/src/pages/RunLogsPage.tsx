@@ -19,6 +19,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { RunLogEntry, RunLogMeta, RunLogSource } from "@agent-studio/agent-schema";
 import { runLogsApi } from "../api/run-logs";
 import { AgentOutputView } from "../components/AgentOutputView";
+import { getSelectedTeam } from "../auth/session";
 
 const SOURCE_COLOR: Record<RunLogSource, string> = {
   system: "default",
@@ -80,7 +81,10 @@ export function RunLogsPage() {
   async function reloadList(keepId?: string | null) {
     setLoading(true);
     try {
-      const res = await runLogsApi.list({ q });
+      const res = await runLogsApi.list({
+        q,
+        team_id: getSelectedTeam()?.id,
+      });
       setItems(res.items);
       setTotal(res.total);
       const nextId = keepId === undefined ? selectedId : keepId;

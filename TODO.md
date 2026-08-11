@@ -1,33 +1,105 @@
 # Agent Studio — backlog
 
-## Cloud Dify Agent as step executor
+按优先级：P0 可远程交付 → P1 稳态运维 → P2 扩展能力。已完成项见文末。
 
-- [ ] Support binding a **cloud Dify Agent** as a per-digital-human step executor (not only pipeline-level Workflow).
-- [ ] Extend digital-human `dify` binding with Agent App Key / `api_base`; invoke Dify Agent API when the step runs.
-- [ ] Define **repo clone / sandbox** strategy for cloud Agent (today clones live on Bridge host under `~/AgentStudio/{project.id}/{repo.id}`; cloud Agent path is not implemented).
+## P0 — 可远程交付
 
-Notes (2026-08-10): UI fields `dify.agent_id` / `agent_name` are metadata only today. Work orders always run via Dify Workflow → HTTP Bridge.
+### Cloud Bridge（remote executor host）
 
-## Bridge MR / commit-record parsing
+- [ ] Bridge 跑在云 VM / 容器，`BRIDGE_PUBLIC_URL` 对 Studio + Dify 可达；Bridge WS 回连 Studio。
+- [ ] 仓库工作区归 Bridge 主机（今日 Studio `ensureCloned` 与 Cursor `local.cwd` 都假定同机 `~/AgentStudio/{project.id}/{repo.id}`，分机即断）。
+- [ ] Ops：云 `.env`（`CURSOR_API_KEY` / git SSH bot / `GITLAB_TOKEN` / `STUDIO_BRIDGE_TOKEN`）；文档写清局域网 vs 公网 URL + TLS 反代。
 
-- [x] Make `parseCommitRecord` accept markdown **table** format (`| field | value |`), not only `- field: value` lists.  
+Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远程执行机，不是把 Cursor 嵌进云端 Dify Agent。
+
+### 存储收尾（YAML → MySQL）
+
+- [ ] 流水线 / 数字人 / Bridge 登记迁 MySQL（今日项目与工单已在库，其余多在 `data/*.yaml`）。
+- [ ] 多实例 / 备份策略与 YAML 双轨脱钩。
+
+### 密钥与租户边界
+
+- [ ] Dify / Git 凭证按团队隔离（今日多为安装级密钥 + 成员门禁）。
+- [ ] 团队级密钥轮换与最小权限文档。
+
+## P1 — 稳态运维
+
+### 工单可靠性
+
+- [ ] Dify Human Input / `form_token` 丢失与恢复路径加固。
+- [ ] Bridge 掉线 / `busy` / 阶段失败后的重试与可恢复状态机。
+- [ ] Studio run_id ↔ Dify ↔ Bridge stage 统一可检索（失败原因、日志串联）。
+
+### 测试与 CI
+
+- [ ] 鉴权 + 团队隔离 API 回归。
+- [ ] 工单启动路由（选仓 / Bridge 可达）测试。
+- [ ] commit-record / MR 解析 + Bridge HTTP 鉴权回归（在现有少量 Bridge 单测之上加厚）。
+
+### 执行器调度
+
+- [ ] 多 Bridge 池：按团队选机、`busy` 排队（单远程主机跑通后再做）。
+
+### 可观测与清理
+
+- [ ] run 级可观测补强（trace / 检索）。
+- [ ] 仓库工作副本与 run 产物磁盘清理策略。
+
+## P2 — 扩展（可后置）
+
+### 身份
+
+- [ ] OAuth / SSO
+
+### Agent 驱动
+
+- [ ] `openai` driver（今日占位）；按「无 Cursor 许可」需求决定是否做。
+- [ ] Trae / Qoder 安装与鉴权文档压实。
+
+### Cloud Dify Agent as step executor
+
+- [ ] 数字人步骤绑定云端 Dify Agent（不只 pipeline 级 Workflow）。
+- [ ] `dify` 绑定扩展 Agent App Key / `api_base`；步骤执行时调 Dify Agent API。
+- [ ] 云 Agent 的 repo clone / sandbox 策略（与云 Bridge 工作区方案对齐后再做）。
+
+Notes (2026-08-10): UI `dify.agent_id` / `agent_name` 仍是元数据；工单仍走 Dify Workflow → HTTP Bridge。云 Bridge 未通前投入产出偏低。
+
+### 工程债（顺手）
+
+- [ ] 继续拆 `work-orders` god service（routing / dify utils 已抽一部分）。
+
+---
+
+## Done
+
+### Auth / teams / multi-tenancy
+
+- [x] **登录与系统权限**：JWT 登录；全局 AuthGuard（health / login / register / Bridge WS 除外）。
+- [x] **团队管理**：团队 → 项目；团队间隔离；角色 owner / member / viewer。
+- [x] **MySQL**：users / teams / team_members / projects；空库 bootstrap admin + 默认团队；YAML 项目一次性迁入。
+- [x] 流水线 / 数字人 / Bridge / 设置按团队隔离；viewer 只读；Dify 仍安装级密钥仅按团队成员门禁。
+- [x] 工单本体迁 MySQL；viewer 只读。
+
+### Bridge MR / commit-record parsing
+
+- [x] `parseCommitRecord` 支持 markdown **table**（`| field | value |`），不只 `- field: value`。  
   Fixed 2026-08-10. Backfilled backend MR: http://localhost:8929/root/dify-pipeline-backend/-/merge_requests/1 (run `64c74bb8`).
 
-## Git bot identity + SSH remotes
+### Git bot identity + SSH remotes
 
-- [x] Bridge: `BRIDGE_GIT_AUTHOR_*` + `BRIDGE_GIT_SSH_KEY` → force commit author; rewrite origin to SSH; MR still via bot `GITLAB_TOKEN`.
+- [x] Bridge: `BRIDGE_GIT_AUTHOR_*` + `BRIDGE_GIT_SSH_KEY` → force commit author；origin 改写 SSH；MR 仍用 bot `GITLAB_TOKEN`。
 - [x] Studio `ensureCloned` prefers SSH when key / `STUDIO_GIT_PREFER_SSH` is set.
-- [x] Ops: dedicated GitLab user `agent-studio-bot` + bot PAT in Bridge `.env`; SSH key moved off root; Maintainer on demo projects.
+- [x] Ops: dedicated GitLab user `agent-studio-bot` + bot PAT；SSH key 离 root；demo 仓 Maintainer。
 
-## Hardening (2026-08-10)
+### Hardening (2026-08-10)
 
-- [x] Bridge HTTP auth (`BRIDGE_HTTP_TOKEN` / `STUDIO_BRIDGE_TOKEN`) on mutating routes; `/health` public.
-- [x] Minimal CI (typecheck + bridge tests).
-- [x] Split Dify secrets to `data/dify-secrets.yaml` (0600); prefer `DIFY_*` env.
+- [x] Bridge HTTP auth（`BRIDGE_HTTP_TOKEN` / `STUDIO_BRIDGE_TOKEN`）；`/health` 公开。
+- [x] Minimal CI（typecheck + bridge tests）。
+- [x] Dify secrets 拆到 `data/dify-secrets.yaml`（0600）；优先 `DIFY_*` env。
 
-## UX polish (2026-08-10)
+### UX polish (2026-08-10)
 
-- [x] Digital-human Dify Agent fields labeled as metadata / not executed.
-- [x] Work-order Human Input auto-syncs `form_token` (less manual「同步 Dify」).
-- [x] README links to `docs/` + `skills/local-stack-setup`.
-- [x] Extract work-order routing + dify utils from god service (further splits TBD).
+- [x] 数字人 Dify Agent 字段标明 metadata / 未执行。
+- [x] 工单 Human Input 自动 sync `form_token`。
+- [x] README 链到 `docs/` + `skills/local-stack-setup`。
+- [x] 抽出 work-order routing + dify utils（进一步拆分见 P2）。

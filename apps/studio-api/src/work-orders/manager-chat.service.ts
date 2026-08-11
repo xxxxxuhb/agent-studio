@@ -50,8 +50,8 @@ export class ManagerChatService implements OnModuleInit {
     return new Date().toISOString();
   }
 
-  getThread(workOrderId: string): ManagerChatThread {
-    this.workOrders.get(workOrderId); // ensure exists
+  async getThread(workOrderId: string): Promise<ManagerChatThread> {
+    await this.workOrders.get(workOrderId); // ensure exists
     const fp = this.filePath(workOrderId);
     if (!fs.existsSync(fp)) {
       return ManagerChatThreadSchema.parse({
@@ -87,7 +87,7 @@ export class ManagerChatService implements OnModuleInit {
   async chat(workOrderId: string, input: unknown) {
     const body = ManagerChatPostSchema.parse(input);
     const text = body.message.trim();
-    let thread = this.getThread(workOrderId);
+    let thread = await this.getThread(workOrderId);
     const userMsg: ManagerChatMessage = {
       id: randomUUID().slice(0, 8),
       role: "user",
@@ -111,7 +111,7 @@ export class ManagerChatService implements OnModuleInit {
     return {
       reply,
       actions,
-      work_order: workOrder || this.workOrders.get(workOrderId),
+      work_order: workOrder || (await this.workOrders.get(workOrderId)),
       thread,
     };
   }
@@ -132,7 +132,7 @@ export class ManagerChatService implements OnModuleInit {
       raw === "status"
     ) {
       return {
-        reply: this.workOrders.describeStatus(workOrderId),
+        reply: await this.workOrders.describeStatus(workOrderId),
         actions: ["status"],
       };
     }
@@ -141,9 +141,9 @@ export class ManagerChatService implements OnModuleInit {
       raw.match(/^(?:澄清|需求补充|补充需求|clarify)[:：\s]+(.+)$/is) ||
       raw.match(/^\/clarify\s+(.+)$/is);
     if (clarify?.[1]) {
-      const order = this.workOrders.clarify(workOrderId, clarify[1].trim());
+      const order = await this.workOrders.clarify(workOrderId, clarify[1].trim());
       return {
-        reply: `已记录澄清，并写回工单需求。\n\n补充内容：\n${clarify[1].trim()}\n\n${this.workOrders.describeStatus(workOrderId)}`,
+        reply: `已记录澄清，并写回工单需求。\n\n补充内容：\n${clarify[1].trim()}\n\n${await this.workOrders.describeStatus(workOrderId)}`,
         actions: ["clarify"],
         workOrder: order,
       };
@@ -159,7 +159,7 @@ export class ManagerChatService implements OnModuleInit {
           feedback: (approve[1] || "").trim(),
         });
         return {
-          reply: `已通过当前步骤。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已通过当前步骤。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["approve"],
           workOrder: order,
         };
@@ -181,7 +181,7 @@ export class ManagerChatService implements OnModuleInit {
           : (rejectEnd[2] || "").trim();
         const order = await this.workOrders.rejectAndEnd(workOrderId, feedback);
         return {
-          reply: `已驳回并结束本轮运行。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已驳回并结束本轮运行。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["reject_end"],
           workOrder: order,
         };
@@ -202,7 +202,7 @@ export class ManagerChatService implements OnModuleInit {
           feedback: (rejectPolicy[2] || "").trim(),
         });
         return {
-          reply: `已按当前步骤驳回策略处理。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已按当前步骤驳回策略处理。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["reject"],
           workOrder: order,
         };
@@ -219,13 +219,13 @@ export class ManagerChatService implements OnModuleInit {
       raw.match(/^让\s*([a-z0-9_-]+)\s*返工(?:[:：\s]+(.*))?$/is);
     if (rework?.[1]) {
       try {
-        const order = this.workOrders.rework(
+        const order = await this.workOrders.rework(
           workOrderId,
           rework[1].trim(),
           (rework[2] || "").trim(),
         );
         return {
-          reply: `已指派返工到「${rework[1].trim()}」并重新执行。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已指派返工到「${rework[1].trim()}」并重新执行。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["rework"],
           workOrder: order,
         };
@@ -242,7 +242,7 @@ export class ManagerChatService implements OnModuleInit {
       try {
         const order = await this.workOrders.syncDify(workOrderId);
         return {
-          reply: `已同步 Dify 状态。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已同步 Dify 状态。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["sync_dify"],
           workOrder: order,
         };
@@ -260,7 +260,7 @@ export class ManagerChatService implements OnModuleInit {
       try {
         const order = await this.workOrders.restart(workOrderId, {});
         return {
-          reply: `已重新执行（结束旧运行后按上次配置再启）。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已重新执行（结束旧运行后按上次配置再启）。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["restart"],
           workOrder: order,
         };
@@ -283,7 +283,7 @@ export class ManagerChatService implements OnModuleInit {
           executor: "dify",
         });
         return {
-          reply: `已启动流水线 \`${startDify[1]}\`（Dify）。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已启动流水线 \`${startDify[1]}\`（Dify）。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["start_dify"],
           workOrder: order,
         };
@@ -310,7 +310,7 @@ export class ManagerChatService implements OnModuleInit {
           executor: "dify",
         });
         return {
-          reply: `已启动流水线 \`${start[1]}\`（Dify）。\n\n${this.workOrders.describeStatus(workOrderId)}`,
+          reply: `已启动流水线 \`${start[1]}\`（Dify）。\n\n${await this.workOrders.describeStatus(workOrderId)}`,
           actions: ["start"],
           workOrder: order,
         };
@@ -328,7 +328,7 @@ export class ManagerChatService implements OnModuleInit {
 
     // fallback: status + hint
     try {
-      const status = this.workOrders.describeStatus(workOrderId);
+      const status = await this.workOrders.describeStatus(workOrderId);
       return {
         reply: `我是总管，先给你当前状态；若要执行操作请用明确指令（输入「帮助」查看）。\n\n${status}`,
         actions: ["fallback_status"],

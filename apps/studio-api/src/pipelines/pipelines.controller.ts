@@ -11,6 +11,7 @@ import {
   Query,
 } from "@nestjs/common";
 import type { PipelineCreate, PipelineUpdate } from "@agent-studio/agent-schema";
+import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { DifyClientService } from "../dify/dify-client.service";
 import { DifyConfigService } from "../dify/dify-config.service";
 import { generateDifyWorkflowDsl } from "../dify/dify-dsl.generator";
@@ -27,32 +28,41 @@ export class PipelinesController {
   ) {}
 
   @Get("pipelines")
-  list(
+  async list(
+    @CurrentUser() user: RequestUser,
     @Query("enabled") enabled?: "true" | "false" | "all",
     @Query("q") q?: string,
+    @Query("team_id") team_id?: string,
   ) {
-    const items = this.pipelines.list({ enabled, q });
+    const items = await this.pipelines.listForUser(user.id, {
+      enabled,
+      q,
+      team_id,
+    });
     return { items, total: items.length };
   }
 
   @Post("pipelines/compose")
-  compose(@Body() body: unknown) {
-    return this.pipelines.compose(body);
+  compose(@CurrentUser() user: RequestUser, @Body() body: unknown) {
+    return this.pipelines.composeForUser(user.id, body);
   }
 
   @Post("seed/pipelines")
-  seed() {
-    return this.pipelines.seedDefaults();
+  seed(
+    @CurrentUser() user: RequestUser,
+    @Query("team_id") team_id?: string,
+  ) {
+    return this.pipelines.seedDefaultsForUser(user.id, team_id || "");
   }
 
   @Get("pipelines/:id")
-  get(@Param("id") id: string) {
-    return this.pipelines.getPublic(id);
+  get(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.pipelines.getPublicForUser(user.id, id);
   }
 
   @Get("pipelines/:id/dify-dsl")
-  difyDsl(@Param("id") id: string) {
-    const pipeline = this.pipelines.get(id);
+  async difyDsl(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    const pipeline = await this.pipelines.getForUser(user.id, id);
     const agents = new Map(
       this.humans.list({ enabled: "all" }).map((h) => [h.id, h]),
     );
@@ -67,10 +77,11 @@ export class PipelinesController {
 
   @Post("pipelines/:id/dify-import")
   async difyImport(
+    @CurrentUser() user: RequestUser,
     @Param("id") id: string,
     @Body() body?: { overwrite?: boolean },
   ) {
-    const pipeline = this.pipelines.get(id);
+    const pipeline = await this.pipelines.getForUser(user.id, id);
     const agents = new Map(
       this.humans.list({ enabled: "all" }).map((h) => [h.id, h]),
     );
@@ -92,9 +103,9 @@ export class PipelinesController {
       published = await this.difyClient.publishWorkflow(appId);
     }
 
-    let pipelinePublic = this.pipelines.getPublic(id);
+    let pipelinePublic = await this.pipelines.getPublicForUser(user.id, id);
     if (appId) {
-      pipelinePublic = this.pipelines.update(id, {
+      pipelinePublic = await this.pipelines.updateForUser(user.id, id, {
         dify: {
           ...(pipeline.dify || {}),
           enabled: pipeline.dify?.enabled ?? false,
@@ -121,8 +132,8 @@ export class PipelinesController {
   }
 
   @Post("pipelines/:id/dify-health")
-  async difyHealth(@Param("id") id: string) {
-    const pipeline = this.pipelines.get(id);
+  async difyHealth(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    const pipeline = await this.pipelines.getForUser(user.id, id);
     try {
       const auth = this.difyConfig.resolveAuthForPipeline(pipeline);
       const parameters = await this.difyClient.getParameters(auth);
@@ -142,22 +153,30 @@ export class PipelinesController {
   }
 
   @Post("pipelines")
-  create(@Body() body: PipelineCreate) {
-    return this.pipelines.create(body);
+  create(@CurrentUser() user: RequestUser, @Body() body: PipelineCreate) {
+    return this.pipelines.createForUser(user.id, body);
   }
 
   @Put("pipelines/:id")
-  update(@Param("id") id: string, @Body() body: PipelineUpdate) {
-    return this.pipelines.update(id, body);
+  update(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: PipelineUpdate,
+  ) {
+    return this.pipelines.updateForUser(user.id, id, body);
   }
 
   @Patch("pipelines/:id/enabled")
-  setEnabled(@Param("id") id: string, @Body() body: { enabled: boolean }) {
-    return this.pipelines.setEnabled(id, Boolean(body?.enabled));
+  setEnabled(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: { enabled: boolean },
+  ) {
+    return this.pipelines.setEnabledForUser(user.id, id, Boolean(body?.enabled));
   }
 
   @Delete("pipelines/:id")
-  remove(@Param("id") id: string) {
-    return this.pipelines.remove(id);
+  remove(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.pipelines.removeForUser(user.id, id);
   }
 }

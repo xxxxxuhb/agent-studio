@@ -6,7 +6,7 @@ import type {
 } from "@agent-studio/agent-schema";
 
 export const workOrdersApi = {
-  list(params: { q?: string; status?: string }) {
+  list(params: { q?: string; status?: string; team_id?: string }) {
     return get<{ items: WorkOrder[]; total: number }>("/work-orders", { params });
   },
   get(id: string) {

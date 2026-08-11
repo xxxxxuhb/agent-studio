@@ -1,0 +1,4 @@
+# if using bind mounts instead of named volumes
+/config/
+/logs/
+/data/

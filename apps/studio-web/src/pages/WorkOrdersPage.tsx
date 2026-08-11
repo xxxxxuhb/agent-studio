@@ -30,6 +30,7 @@ import type { PipelinePublic, Project, WorkOrder, WorkOrderCreate } from "@agent
 import { pipelinesApi } from "../api/pipelines";
 import { projectsApi } from "../api/projects";
 import { workOrdersApi } from "../api/work-orders";
+import { getSelectedTeam } from "../auth/session";
 import { ManagerChatPanel } from "../components/ManagerChatPanel";
 import { WorkOrderRunPanel } from "../components/WorkOrderRunPanel";
 import { STATUS_LABEL, CATEGORY_LABEL, CATEGORY_OPTIONS } from "../work-orders/workOrderLabels";
@@ -70,10 +71,11 @@ export function WorkOrdersPage() {
   async function reload(keepId?: string | null) {
     setLoading(true);
     try {
+      const teamId = getSelectedTeam()?.id;
       const [orders, pipes, projectList] = await Promise.all([
-        workOrdersApi.list({ q, status }),
-        pipelinesApi.list({ enabled: "true" }),
-        projectsApi.list({ enabled: "true" }),
+        workOrdersApi.list({ q, status, team_id: teamId }),
+        pipelinesApi.list({ enabled: "true", team_id: teamId }),
+        projectsApi.list({ enabled: "true", team_id: teamId }),
       ]);
       setItems(orders.items);
       setTotal(orders.total);
@@ -166,6 +168,7 @@ export function WorkOrdersPage() {
       tags: [],
       pipeline_id: pipelines[0]?.id,
       project_id: projects[0]?.id || "",
+      team_id: getSelectedTeam()?.id || "",
     });
     setEditorOpen(true);
   }
@@ -197,6 +200,7 @@ export function WorkOrdersPage() {
       const payload: WorkOrderCreate = {
         ...values,
         tags,
+        team_id: values.team_id || getSelectedTeam()?.id || "",
       };
       if (editingId) {
         await workOrdersApi.update(editingId, payload);

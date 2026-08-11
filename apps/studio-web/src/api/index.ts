@@ -1,3 +1,4 @@
+export { authApi, teamsApi } from "./auth";
 export { bridgesApi } from "./bridges";
 export { digitalHumansApi } from "./digital-humans";
 export { difyApi } from "./dify";

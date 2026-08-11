@@ -46,6 +46,8 @@ export type RunLogAppend = z.infer<typeof RunLogAppendSchema>;
 export const RunLogMetaSchema = z.object({
   run_id: z.string(),
   work_order_id: z.string(),
+  /** Owning team (from work order); used for list ACL. */
+  team_id: z.string().optional().default(""),
   title: z.string().optional().default(""),
   pipeline_id: z.string().optional().default(""),
   pipeline_name: z.string().optional().default(""),

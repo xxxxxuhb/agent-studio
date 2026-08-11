@@ -29,11 +29,15 @@ import type {
   ProjectCreate,
   ProjectRepo,
   ProjectRepoRole,
+  TeamListItem,
 } from "@agent-studio/agent-schema";
+import { teamsApi } from "../api/auth";
 import { projectsApi } from "../api/projects";
+import { getSelectedTeam } from "../auth/session";
 
 type EditorValues = {
   id: string;
+  team_id: string;
   name: string;
   description?: string;
   clone_root?: string;
@@ -69,6 +73,7 @@ function cloneStatusColor(status?: string) {
 
 export function ProjectsPage() {
   const [items, setItems] = useState<Project[]>([]);
+  const [teams, setTeams] = useState<TeamListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [defaultCloneRoot, setDefaultCloneRoot] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -87,9 +92,17 @@ export function ProjectsPage() {
   async function reload(keepId?: string | null) {
     setLoading(true);
     try {
-      const res = await projectsApi.list({ q });
+      const currentTeam = getSelectedTeam();
+      const [res, teamRes] = await Promise.all([
+        projectsApi.list({
+          q,
+          team_id: currentTeam?.id,
+        }),
+        teamsApi.list(),
+      ]);
       setItems(res.items);
       setTotal(res.total);
+      setTeams(teamRes.items);
       if (res.default_clone_root) setDefaultCloneRoot(res.default_clone_root);
       const nextId = keepId === undefined ? selectedId : keepId;
       if (nextId && !res.items.some((p) => p.id === nextId)) {
@@ -111,8 +124,10 @@ export function ProjectsPage() {
 
   function openCreate() {
     setEditingId(null);
+    const currentTeam = getSelectedTeam();
     form.setFieldsValue({
       id: "",
+      team_id: currentTeam?.id || teams[0]?.id || "",
       name: "",
       description: "",
       clone_root: "",
@@ -138,6 +153,7 @@ export function ProjectsPage() {
     setEditingId(project.id);
     form.setFieldsValue({
       id: project.id,
+      team_id: project.team_id,
       name: project.name,
       description: project.description,
       clone_root: project.clone_root,
@@ -172,6 +188,7 @@ export function ProjectsPage() {
       }));
       const payload: ProjectCreate = {
         id: values.id.trim(),
+        team_id: values.team_id,
         name: values.name.trim(),
         description: (values.description || "").trim(),
         clone_root: (values.clone_root || "").trim(),
@@ -180,7 +197,8 @@ export function ProjectsPage() {
         repos,
       };
       if (editingId) {
-        await projectsApi.update(editingId, payload);
+        const { team_id: _team, id: _id, ...rest } = payload;
+        await projectsApi.update(editingId, rest);
         message.success("项目已更新");
         setSelectedId(editingId);
       } else {
@@ -317,6 +335,11 @@ export function ProjectsPage() {
                 </Typography.Paragraph>
                 <Space wrap>
                   <Tag>id: {selected.id}</Tag>
+                  <Tag color="blue">
+                    团队{" "}
+                    {teams.find((t) => t.id === selected.team_id)?.name ||
+                      selected.team_id}
+                  </Tag>
                   <Tag color={selected.enabled ? "green" : "default"}>
                     {selected.enabled ? "启用" : "停用"}
                   </Tag>
@@ -399,6 +422,20 @@ export function ProjectsPage() {
         okText="保存"
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            name="team_id"
+            label="所属团队"
+            rules={[{ required: true, message: "请选择团队" }]}
+            extra="当前工作台团队（不可跨团队创建）"
+          >
+            <Select
+              disabled
+              options={teams.map((t) => ({
+                value: t.id,
+                label: `${t.name} (${t.slug})`,
+              }))}
+            />
+          </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item

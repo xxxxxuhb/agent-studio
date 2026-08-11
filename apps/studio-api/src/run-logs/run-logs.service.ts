@@ -1,8 +1,7 @@
-import { Injectable, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import YAML from "yaml";
+import { In, Repository } from "typeorm";
 import {
   RunLogEntrySchema,
   RunLogMetaSchema,
@@ -12,38 +11,82 @@ import {
   type RunLogSource,
   type WorkOrder,
 } from "@agent-studio/agent-schema";
+import { RunLogEntryEntity } from "./entities/run-log-entry.entity";
+import { RunLogMetaEntity } from "./entities/run-log-meta.entity";
 
 @Injectable()
-export class RunLogsService implements OnModuleInit {
-  private dataDir = "";
-
-  onModuleInit() {
-    this.dataDir = path.resolve(
-      process.env.STUDIO_RUN_LOG_DIR ||
-        path.join(process.cwd(), "data", "run-logs"),
-    );
-    fs.mkdirSync(this.dataDir, { recursive: true });
-  }
-
-  private runDir(runId: string) {
-    return path.join(this.dataDir, runId);
-  }
-
-  private metaPath(runId: string) {
-    return path.join(this.runDir(runId), "meta.yaml");
-  }
-
-  private eventsPath(runId: string) {
-    return path.join(this.runDir(runId), "events.jsonl");
-  }
+export class RunLogsService {
+  constructor(
+    @InjectRepository(RunLogMetaEntity)
+    private readonly metas: Repository<RunLogMetaEntity>,
+    @InjectRepository(RunLogEntryEntity)
+    private readonly entries: Repository<RunLogEntryEntity>,
+  ) {}
 
   private nowIso() {
     return new Date().toISOString();
   }
 
-  ensureRun(meta: {
+  private toMeta(entity: RunLogMetaEntity): RunLogMeta {
+    return RunLogMetaSchema.parse({
+      run_id: entity.run_id,
+      work_order_id: entity.work_order_id,
+      team_id: entity.team_id || "",
+      title: entity.title || "",
+      pipeline_id: entity.pipeline_id || "",
+      pipeline_name: entity.pipeline_name || "",
+      executor: entity.executor || "",
+      project_id: entity.project_id || "",
+      work_order_status: entity.work_order_status || "",
+      started_at: entity.started_at,
+      updated_at: entity.updated_at,
+      entry_count: entity.entry_count || 0,
+      sources: entity.sources || [],
+    });
+  }
+
+  private toEntry(entity: RunLogEntryEntity): RunLogEntry {
+    return RunLogEntrySchema.parse({
+      id: entity.id,
+      at: entity.at,
+      run_id: entity.run_id,
+      work_order_id: entity.work_order_id,
+      source: entity.source,
+      level: entity.level || "info",
+      message: entity.message,
+      body: entity.body || "",
+      step_id: entity.step_id || undefined,
+      agent: entity.agent || undefined,
+      bridge_stage: entity.bridge_stage || undefined,
+      event_type: entity.event_type || undefined,
+      detail: entity.detail || undefined,
+    });
+  }
+
+  private async saveMeta(meta: RunLogMeta): Promise<RunLogMeta> {
+    const next = RunLogMetaSchema.parse(meta);
+    await this.metas.save({
+      run_id: next.run_id,
+      work_order_id: next.work_order_id,
+      team_id: next.team_id || "",
+      title: next.title || "",
+      pipeline_id: next.pipeline_id || "",
+      pipeline_name: next.pipeline_name || "",
+      executor: next.executor || "",
+      project_id: next.project_id || "",
+      work_order_status: next.work_order_status || "",
+      started_at: next.started_at,
+      updated_at: next.updated_at,
+      entry_count: next.entry_count || 0,
+      sources: next.sources || [],
+    });
+    return next;
+  }
+
+  async ensureRun(meta: {
     run_id: string;
     work_order_id: string;
+    team_id?: string;
     title?: string;
     pipeline_id?: string;
     pipeline_name?: string;
@@ -51,13 +94,14 @@ export class RunLogsService implements OnModuleInit {
     project_id?: string;
     work_order_status?: string;
     started_at?: string;
-  }): RunLogMeta {
-    const dir = this.runDir(meta.run_id);
-    fs.mkdirSync(dir, { recursive: true });
-    const existing = this.readMeta(meta.run_id);
+  }): Promise<RunLogMeta> {
+    const existing = await this.metas.findOne({
+      where: { run_id: meta.run_id },
+    });
     const next = RunLogMetaSchema.parse({
       run_id: meta.run_id,
       work_order_id: meta.work_order_id,
+      team_id: meta.team_id ?? existing?.team_id ?? "",
       title: meta.title ?? existing?.title ?? "",
       pipeline_id: meta.pipeline_id ?? existing?.pipeline_id ?? "",
       pipeline_name: meta.pipeline_name ?? existing?.pipeline_name ?? "",
@@ -70,18 +114,21 @@ export class RunLogsService implements OnModuleInit {
       entry_count: existing?.entry_count ?? 0,
       sources: existing?.sources ?? [],
     });
-    this.writeMeta(next);
-    return next;
+    return this.saveMeta(next);
   }
 
   /** Sync meta fields from current work order (status / title). */
-  touchFromOrder(order: WorkOrder) {
+  async touchFromOrder(order: WorkOrder) {
     const run = order.run;
     if (!run?.run_id) return;
-    if (!fs.existsSync(this.runDir(run.run_id))) {
-      this.ensureRun({
+    const existing = await this.metas.findOne({
+      where: { run_id: run.run_id },
+    });
+    if (!existing) {
+      await this.ensureRun({
         run_id: run.run_id,
         work_order_id: order.id,
+        team_id: order.team_id,
         title: order.title,
         pipeline_id: run.pipeline_id,
         pipeline_name: run.pipeline_name,
@@ -92,39 +139,61 @@ export class RunLogsService implements OnModuleInit {
       });
       return;
     }
-    const meta = this.readMeta(run.run_id);
-    if (!meta) return;
-    this.writeMeta(
+    await this.saveMeta(
       RunLogMetaSchema.parse({
-        ...meta,
+        ...this.toMeta(existing),
         title: order.title,
+        team_id: order.team_id || existing.team_id,
         work_order_status: order.status,
-        project_id: order.project_id || meta.project_id,
+        project_id: order.project_id || existing.project_id,
         updated_at: this.nowIso(),
       }),
     );
   }
 
-  append(input: RunLogAppend): RunLogEntry {
+  async append(input: RunLogAppend): Promise<RunLogEntry> {
     const entry = RunLogEntrySchema.parse({
       ...input,
       id: input.id || randomUUID().slice(0, 10),
       at: input.at || this.nowIso(),
       body: input.body || "",
     });
-    this.ensureRun({
+    await this.ensureRun({
       run_id: entry.run_id,
       work_order_id: entry.work_order_id,
     });
-    fs.appendFileSync(this.eventsPath(entry.run_id), `${JSON.stringify(entry)}\n`, "utf8");
 
-    const meta = this.readMeta(entry.run_id)!;
+    // Upsert by id so re-appends / migration are idempotent
+    await this.entries.save({
+      id: entry.id,
+      run_id: entry.run_id,
+      work_order_id: entry.work_order_id,
+      at: entry.at,
+      source: entry.source,
+      level: entry.level || "info",
+      message: entry.message,
+      body: entry.body || "",
+      step_id: entry.step_id || "",
+      agent: entry.agent || "",
+      bridge_stage: entry.bridge_stage || "",
+      event_type: entry.event_type || "",
+      detail: entry.detail || null,
+    });
+
+    const metaEntity = await this.metas.findOne({
+      where: { run_id: entry.run_id },
+    });
+    if (!metaEntity) return entry;
+    const meta = this.toMeta(metaEntity);
     const sources = new Set<RunLogSource>(meta.sources || []);
     sources.add(entry.source);
-    this.writeMeta(
+    const entryCount = await this.entries.count({
+      where: { run_id: entry.run_id },
+    });
+    await this.saveMeta(
       RunLogMetaSchema.parse({
         ...meta,
-        entry_count: (meta.entry_count || 0) + 1,
+        entry_count: entryCount,
         sources: [...sources],
         updated_at: entry.at,
       }),
@@ -133,7 +202,7 @@ export class RunLogsService implements OnModuleInit {
   }
 
   /** Convenience: log from a work order context. */
-  log(
+  async log(
     order: WorkOrder,
     partial: {
       source: RunLogSource;
@@ -148,12 +217,13 @@ export class RunLogsService implements OnModuleInit {
       id?: string;
       at?: string;
     },
-  ): RunLogEntry | null {
+  ): Promise<RunLogEntry | null> {
     const run = order.run;
     if (!run?.run_id) return null;
-    this.ensureRun({
+    await this.ensureRun({
       run_id: run.run_id,
       work_order_id: order.id,
+      team_id: order.team_id,
       title: order.title,
       pipeline_id: run.pipeline_id,
       pipeline_name: run.pipeline_name,
@@ -179,26 +249,28 @@ export class RunLogsService implements OnModuleInit {
     });
   }
 
-  list(filters?: {
+  async list(filters?: {
     q?: string;
     work_order_id?: string;
+    team_id?: string;
+    team_ids?: string[];
     limit?: number;
-  }): { items: RunLogMeta[]; total: number } {
-    if (!fs.existsSync(this.dataDir)) {
-      return { items: [], total: 0 };
-    }
-    const dirs = fs
-      .readdirSync(this.dataDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-
-    let items = dirs
-      .map((id) => this.readMeta(id))
-      .filter((m): m is RunLogMeta => Boolean(m));
-
+  }): Promise<{ items: RunLogMeta[]; total: number }> {
+    const where: Record<string, unknown> = {};
     if (filters?.work_order_id) {
-      items = items.filter((m) => m.work_order_id === filters.work_order_id);
+      where.work_order_id = filters.work_order_id;
     }
+    if (filters?.team_id) {
+      where.team_id = filters.team_id;
+    } else if (filters?.team_ids) {
+      if (!filters.team_ids.length) {
+        return { items: [], total: 0 };
+      }
+      where.team_id = In(filters.team_ids);
+    }
+
+    let items = (await this.metas.find({ where })).map((e) => this.toMeta(e));
+
     if (filters?.q?.trim()) {
       const n = filters.q.trim().toLowerCase();
       items = items.filter(
@@ -217,50 +289,62 @@ export class RunLogsService implements OnModuleInit {
     return { items: sliced, total: items.length };
   }
 
-  get(runId: string, filters?: { source?: string; level?: string }) {
-    const meta = this.readMeta(runId);
-    if (!meta) throw new NotFoundException(`run log not found: ${runId}`);
-    let entries = this.readEntries(runId);
+  async get(runId: string, filters?: { source?: string; level?: string }) {
+    const metaEntity = await this.metas.findOne({ where: { run_id: runId } });
+    if (!metaEntity) throw new NotFoundException(`run log not found: ${runId}`);
+    const meta = this.toMeta(metaEntity);
+
+    const where: Record<string, unknown> = { run_id: runId };
     if (filters?.source && filters.source !== "all") {
-      entries = entries.filter((e) => e.source === filters.source);
+      where.source = filters.source;
     }
     if (filters?.level && filters.level !== "all") {
-      entries = entries.filter((e) => e.level === filters.level);
+      where.level = filters.level;
     }
-    return { meta, entries, total: entries.length };
+    const rows = await this.entries.find({
+      where,
+      order: { at: "ASC" },
+    });
+    const entryList = rows.map((e) => this.toEntry(e));
+    return { meta, entries: entryList, total: entryList.length };
   }
 
-  private readMeta(runId: string): RunLogMeta | null {
-    const fp = this.metaPath(runId);
-    if (!fs.existsSync(fp)) return null;
-    try {
-      return RunLogMetaSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
-    } catch {
-      return null;
-    }
-  }
-
-  private writeMeta(meta: RunLogMeta) {
-    fs.mkdirSync(this.runDir(meta.run_id), { recursive: true });
-    fs.writeFileSync(
-      this.metaPath(meta.run_id),
-      `# Run log ${meta.run_id}\n${YAML.stringify(meta, { lineWidth: 100 })}`,
-      "utf8",
+  /** Used by bootstrap migrate: insert meta + entries if run_id missing. */
+  async importFromFiles(meta: RunLogMeta, entries: RunLogEntry[]) {
+    const exists = await this.metas.findOne({ where: { run_id: meta.run_id } });
+    if (exists) return false;
+    await this.saveMeta(
+      RunLogMetaSchema.parse({
+        ...meta,
+        entry_count: entries.length,
+        sources: [
+          ...new Set([
+            ...(meta.sources || []),
+            ...entries.map((e) => e.source),
+          ]),
+        ],
+      }),
     );
-  }
-
-  private readEntries(runId: string): RunLogEntry[] {
-    const fp = this.eventsPath(runId);
-    if (!fs.existsSync(fp)) return [];
-    const lines = fs.readFileSync(fp, "utf8").split("\n").filter(Boolean);
-    const out: RunLogEntry[] = [];
-    for (const line of lines) {
-      try {
-        out.push(RunLogEntrySchema.parse(JSON.parse(line)));
-      } catch {
-        /* skip corrupt lines */
-      }
+    for (const entry of entries) {
+      const parsed = RunLogEntrySchema.safeParse(entry);
+      if (!parsed.success) continue;
+      const e = parsed.data;
+      await this.entries.save({
+        id: e.id,
+        run_id: e.run_id,
+        work_order_id: e.work_order_id,
+        at: e.at,
+        source: e.source,
+        level: e.level || "info",
+        message: e.message,
+        body: e.body || "",
+        step_id: e.step_id || "",
+        agent: e.agent || "",
+        bridge_stage: e.bridge_stage || "",
+        event_type: e.event_type || "",
+        detail: e.detail || null,
+      });
     }
-    return out;
+    return true;
   }
 }

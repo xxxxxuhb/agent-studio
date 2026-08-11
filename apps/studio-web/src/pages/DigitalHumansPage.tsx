@@ -28,6 +28,7 @@ import {
 } from "@ant-design/icons";
 import type { DigitalHuman, DigitalHumanCreate, Role } from "@agent-studio/agent-schema";
 import { digitalHumansApi } from "../api/digital-humans";
+import { getSelectedTeam } from "../auth/session";
 
 const ROLES: Role[] = [
   "intake",
@@ -94,7 +95,12 @@ export function DigitalHumansPage() {
   async function reload(keepId?: string | null) {
     setLoading(true);
     try {
-      const data = await digitalHumansApi.list({ q, role, enabled });
+      const data = await digitalHumansApi.list({
+        q,
+        role,
+        enabled,
+        team_id: getSelectedTeam()?.id,
+      });
       setItems(data.items);
       setTotal(data.total);
       const nextId = keepId === undefined ? selectedId : keepId;
@@ -168,6 +174,7 @@ export function DigitalHumansPage() {
   function toPayload(values: FormValues): DigitalHumanCreate {
     return {
       id: values.id.trim(),
+      team_id: getSelectedTeam()?.id || "",
       name: values.name.trim(),
       role: values.role,
       avatar_label: (values.avatar_label || "").trim() || values.name.trim().slice(0, 1),
@@ -241,7 +248,7 @@ export function DigitalHumansPage() {
             <Button
               icon={<ReloadOutlined />}
               onClick={async () => {
-                const r = await digitalHumansApi.seedDefaults();
+                const r = await digitalHumansApi.seedDefaults(getSelectedTeam()?.id);
                 message.success(
                   `导入 ${r.imported.length}，跳过 ${r.skipped.length}，共 ${r.total}`,
                 );

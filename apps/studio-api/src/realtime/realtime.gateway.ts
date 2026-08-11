@@ -86,7 +86,7 @@ export class RealtimeGateway
   }
 
   @SubscribeMessage("subscribe_work_order")
-  subscribe(
+  async subscribe(
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { work_order_id?: string },
   ) {
@@ -95,7 +95,7 @@ export class RealtimeGateway
     client.join(this.room(id));
     this.watchRef.set(id, (this.watchRef.get(id) || 0) + 1);
     try {
-      const order = this.workOrders.get(id);
+      const order = await this.workOrders.get(id);
       client.emit("work_order", order);
       return { ok: true, id };
     } catch (err) {
@@ -131,7 +131,7 @@ export class RealtimeGateway
       for (const id of [...this.watchRef.keys()]) {
         let order;
         try {
-          order = this.workOrders.get(id);
+          order = await this.workOrders.get(id);
         } catch {
           this.watchRef.delete(id);
           continue;
@@ -148,7 +148,7 @@ export class RealtimeGateway
             const msg = err instanceof Error ? err.message : String(err);
             this.logger.warn(`poll sync failed ${id}: ${msg}`);
             try {
-              const soft = this.workOrders.noteDifySyncRetry(id, msg);
+              const soft = await this.workOrders.noteDifySyncRetry(id, msg);
               this.server.to(this.room(id)).emit("work_order", soft);
             } catch {
               /* ignore persist errors */

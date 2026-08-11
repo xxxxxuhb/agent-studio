@@ -14,6 +14,7 @@ import type {
   DigitalHumanCreate,
   DigitalHumanUpdate,
 } from "@agent-studio/agent-schema";
+import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { DigitalHumansService } from "./digital-humans.service";
 
 @Controller()
@@ -23,42 +24,60 @@ export class DigitalHumansController {
   ) {}
 
   @Get("digital-humans")
-  list(
+  async list(
+    @CurrentUser() user: RequestUser,
     @Query("enabled") enabled?: "true" | "false" | "all",
     @Query("role") role?: string,
     @Query("q") q?: string,
+    @Query("team_id") team_id?: string,
   ) {
-    const items = this.humans.list({ enabled, role, q });
+    const items = await this.humans.listForUser(user.id, {
+      enabled,
+      role,
+      q,
+      team_id,
+    });
     return { items, total: items.length };
   }
 
   @Get("digital-humans/:id")
-  get(@Param("id") id: string) {
-    return this.humans.get(id);
+  get(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.humans.getForUser(user.id, id);
   }
 
   @Post("digital-humans")
-  create(@Body() body: DigitalHumanCreate) {
-    return this.humans.create(body);
+  create(@CurrentUser() user: RequestUser, @Body() body: DigitalHumanCreate) {
+    return this.humans.createForUser(user.id, body);
   }
 
   @Put("digital-humans/:id")
-  update(@Param("id") id: string, @Body() body: DigitalHumanUpdate) {
-    return this.humans.update(id, body);
+  update(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: DigitalHumanUpdate,
+  ) {
+    return this.humans.updateForUser(user.id, id, body);
   }
 
   @Patch("digital-humans/:id/enabled")
-  setEnabled(@Param("id") id: string, @Body() body: { enabled: boolean }) {
-    return this.humans.setEnabled(id, Boolean(body?.enabled));
+  setEnabled(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: { enabled: boolean },
+  ) {
+    return this.humans.setEnabledForUser(user.id, id, Boolean(body?.enabled));
   }
 
   @Delete("digital-humans/:id")
-  remove(@Param("id") id: string) {
-    return this.humans.remove(id);
+  remove(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.humans.removeForUser(user.id, id);
   }
 
   @Post("seed/defaults")
-  seed() {
-    return this.humans.seedDefaults();
+  seed(
+    @CurrentUser() user: RequestUser,
+    @Query("team_id") team_id?: string,
+  ) {
+    return this.humans.seedDefaultsForUser(user.id, team_id || "");
   }
 }

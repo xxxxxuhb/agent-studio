@@ -3,10 +3,12 @@ import axios, {
   type AxiosRequestConfig,
   type AxiosResponse,
 } from "axios";
+import { clearSession, getToken } from "../auth/session";
 
 export type HttpErrorPayload = {
   message?: string | string[];
   error?: string;
+  statusCode?: number;
 };
 
 function extractErrorMessage(err: unknown): string {
@@ -24,9 +26,32 @@ export const http: AxiosInstance = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+http.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 http.interceptors.response.use(
   (res: AxiosResponse) => res,
-  (err) => Promise.reject(new Error(extractErrorMessage(err))),
+  (err) => {
+    if (axios.isAxiosError(err) && err.response?.status === 401) {
+      const url = String(err.config?.url || "");
+      if (!url.includes("/auth/login") && !url.includes("/auth/register")) {
+        clearSession();
+        if (
+          typeof window !== "undefined" &&
+          !window.location.pathname.startsWith("/login")
+        ) {
+          window.location.assign("/login");
+        }
+      }
+    }
+    return Promise.reject(new Error(extractErrorMessage(err)));
+  },
 );
 
 export async function get<T>(url: string, config?: AxiosRequestConfig) {

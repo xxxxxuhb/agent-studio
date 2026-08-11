@@ -10,6 +10,7 @@ import {
   Query,
 } from "@nestjs/common";
 import type { WorkOrderCreate, WorkOrderUpdate } from "@agent-studio/agent-schema";
+import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { ManagerChatService } from "./manager-chat.service";
 import { WorkOrdersService } from "./work-orders.service";
 
@@ -21,81 +22,131 @@ export class WorkOrdersController {
   ) {}
 
   @Get("work-orders")
-  list(@Query("status") status?: string, @Query("q") q?: string) {
-    const items = this.workOrders.list({ status, q });
+  async list(
+    @CurrentUser() user: RequestUser,
+    @Query("status") status?: string,
+    @Query("q") q?: string,
+    @Query("team_id") team_id?: string,
+  ) {
+    const items = await this.workOrders.listForUser(user.id, {
+      status,
+      q,
+      team_id,
+    });
     return { items, total: items.length };
   }
 
   @Get("work-orders/:id/chat")
-  getChat(@Param("id") id: string) {
+  async getChat(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    await this.workOrders.getForUser(user.id, id);
     return this.managerChat.getThread(id);
   }
 
   @Post("work-orders/:id/chat")
-  postChat(@Param("id") id: string, @Body() body: unknown) {
+  async postChat(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    await this.workOrders.requireWritableWorkOrder(user.id, id);
     return this.managerChat.chat(id, body);
   }
 
   @Get("work-orders/:id")
-  get(@Param("id") id: string) {
-    return this.workOrders.get(id);
+  get(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.workOrders.getForUser(user.id, id);
   }
 
   @Post("work-orders")
-  create(@Body() body: WorkOrderCreate) {
-    return this.workOrders.create(body);
+  create(@CurrentUser() user: RequestUser, @Body() body: WorkOrderCreate) {
+    return this.workOrders.createForUser(user.id, body);
   }
 
   @Put("work-orders/:id")
-  update(@Param("id") id: string, @Body() body: WorkOrderUpdate) {
-    return this.workOrders.update(id, body);
+  update(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: WorkOrderUpdate,
+  ) {
+    return this.workOrders.updateForUser(user.id, id, body);
   }
 
   @Delete("work-orders/:id")
-  remove(@Param("id") id: string) {
-    return this.workOrders.remove(id);
+  remove(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.workOrders.removeForUser(user.id, id);
   }
 
   @Post("work-orders/:id/start")
-  start(@Param("id") id: string, @Body() body: unknown) {
-    return this.workOrders.start(id, body);
+  start(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.workOrders.startForUser(user.id, id, body);
   }
 
   @Post("work-orders/:id/restart")
-  restart(@Param("id") id: string, @Body() body: unknown) {
-    return this.workOrders.restart(id, body);
+  restart(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.workOrders.restartForUser(user.id, id, body);
   }
 
   @Post("work-orders/:id/sync-dify")
-  syncDify(@Param("id") id: string) {
-    return this.workOrders.syncDify(id);
+  syncDify(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.workOrders.syncDifyForUser(user.id, id);
   }
 
   @Post("work-orders/:id/run-step")
-  runStep(@Param("id") id: string) {
+  async runStep(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    await this.workOrders.requireWritableWorkOrder(user.id, id);
     return this.workOrders.runCurrentStep(id);
   }
 
   @Post("work-orders/:id/cancel")
-  cancel(@Param("id") id: string, @Body() body: { feedback?: string }) {
-    return this.workOrders.rejectAndEnd(id, body?.feedback || "手动结束运行");
+  cancel(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: { feedback?: string },
+  ) {
+    return this.workOrders.rejectAndEndForUser(
+      user.id,
+      id,
+      body?.feedback || "手动结束运行",
+    );
   }
 
   @Post("work-orders/:id/decision")
-  decide(@Param("id") id: string, @Body() body: unknown) {
-    return this.workOrders.decide(id, body);
+  decide(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.workOrders.decideForUser(user.id, id, body);
   }
 
   @Post("work-orders/:id/clarify")
-  clarify(@Param("id") id: string, @Body() body: { note?: string }) {
-    return this.workOrders.clarify(id, body?.note || "");
+  clarify(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: { note?: string },
+  ) {
+    return this.workOrders.clarifyForUser(user.id, id, body?.note || "");
   }
 
   @Post("work-orders/:id/rework")
   rework(
+    @CurrentUser() user: RequestUser,
     @Param("id") id: string,
     @Body() body: { step_id?: string; feedback?: string },
   ) {
-    return this.workOrders.rework(id, body?.step_id || "", body?.feedback || "");
+    return this.workOrders.reworkForUser(
+      user.id,
+      id,
+      body?.step_id || "",
+      body?.feedback || "",
+    );
   }
 }
