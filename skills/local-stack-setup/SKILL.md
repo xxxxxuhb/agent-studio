@@ -27,7 +27,7 @@ Prefer the checklists below over copying machine-specific narrative from those d
 
 Done when all of these pass:
 
-1. Docker MySQL healthy on host port **3316**; `init.sql` applied (`SHOW TABLES` includes `users`, `work_orders`, `run_logs`).
+1. Docker MySQL healthy on host port **3316**; `init.sql` applied (`SHOW TABLES` includes `users`, `work_orders`, `run_logs`, `digital_humans`, `pipelines`, `bridges`).
 2. GitLab Web responds on the agreed HTTP port (default **8929**).
 3. Dify Web responds on **http://localhost** (or the port they mapped).
 4. Bridge `GET /health` on **8787**.
@@ -225,7 +225,7 @@ npm run bridge -- start --driver cursor ...  # or their usual Bridge start
 
 After `.env` changes, **restart** the matching process.
 
-First API boot (empty `users`): creates admin + slug=`default` team; may migrate leftover YAML projects / work orders / run-logs into MySQL (source files kept).
+First API boot (empty `users`): creates admin + slug=`default` team; may migrate leftover YAML projects / work orders / run-logs / agents / pipelines / bridges into MySQL (source files kept).
 
 ### 8. Verify
 
@@ -248,9 +248,19 @@ Confirm only **one** process owns `:8787` and `:8790`.
 | Data | Storage |
 |------|---------|
 | users / teams / members / projects / work_orders / run_logs | **MySQL** |
-| pipelines / digital humans / bridges / team-settings | YAML under `apps/studio-api/data/` (`team_id` scoped) |
-| manager chat threads | files under `data/chats/` (still) |
-| Dify App Key / console token | env or `data/dify-secrets.yaml` |
+| pipelines / digital humans / bridges | **MySQL** (`digital_humans` / `pipelines` / `bridges`) |
+| team-settings / Dify secrets / chats | YAML/files under `apps/studio-api/data/` |
+| leftover YAML under `data/{agents,pipelines,bridges,...}` | one-shot import only (source kept) |
+| work-order git workspace + AGENTS.md | **Bridge host** `BRIDGE_REPOS_DIR` (default `~/AgentStudio`) via `POST /workspace/ensure` |
+
+## Remote Bridge (split host)
+
+When Bridge is not on the Studio machine:
+
+1. Bridge: `BRIDGE_PUBLIC_URL=http://<bridge-host>:8787`, `STUDIO_URL=http://<studio-host>:8790`, shared `STUDIO_BRIDGE_TOKEN`, git bot + agent keys, `BRIDGE_REPOS_DIR`.
+2. Studio/Dify: `DIFY_BRIDGE_BASE_URL` / settings `bridge_base_url` = that same reachable Bridge URL (not `127.0.0.1` on the wrong machine).
+3. Studio prefers registered executor `base_url` for `/workspace/ensure` + `/routing/select`.
+4. See `docs/环境配置指南.md` §3.4.
 
 ## Hard rules for the agent
 

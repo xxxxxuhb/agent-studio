@@ -5,8 +5,20 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import YAML from "yaml";
 import { Repository } from "typeorm";
-import { ProjectSchema, RunLogEntrySchema, RunLogMetaSchema, WorkOrderSchema, type ProjectRepo } from "@agent-studio/agent-schema";
+import {
+  BridgeExecutorSchema,
+  DigitalHumanSchema,
+  PipelineSchema,
+  ProjectSchema,
+  RunLogEntrySchema,
+  RunLogMetaSchema,
+  WorkOrderSchema,
+  type ProjectRepo,
+} from "@agent-studio/agent-schema";
 import { AuthService } from "../auth/auth.service";
+import { BridgeEntity } from "../bridges/entities/bridge.entity";
+import { DigitalHumanEntity } from "../digital-humans/entities/digital-human.entity";
+import { PipelineEntity } from "../pipelines/entities/pipeline.entity";
 import { ProjectEntity } from "../projects/entities/project.entity";
 import { RunLogsService } from "../run-logs/run-logs.service";
 import { TeamEntity } from "../teams/entities/team.entity";
@@ -29,6 +41,12 @@ export class BootstrapService implements OnModuleInit {
     private readonly projects: Repository<ProjectEntity>,
     @InjectRepository(WorkOrderEntity)
     private readonly workOrders: Repository<WorkOrderEntity>,
+    @InjectRepository(DigitalHumanEntity)
+    private readonly digitalHumans: Repository<DigitalHumanEntity>,
+    @InjectRepository(PipelineEntity)
+    private readonly pipelines: Repository<PipelineEntity>,
+    @InjectRepository(BridgeEntity)
+    private readonly bridges: Repository<BridgeEntity>,
     private readonly runLogs: RunLogsService,
   ) {}
 
@@ -38,7 +56,10 @@ export class BootstrapService implements OnModuleInit {
     await this.migrateYamlProjects(team.id);
     await this.migrateYamlWorkOrders(team.id);
     await this.migrateFileRunLogs(team.id);
-    this.stampEmptyYamlTeamIds(team.id);
+    await this.migrateYamlDigitalHumans(team.id);
+    await this.migrateYamlPipelines(team.id);
+    await this.migrateYamlBridges(team.id);
+    await this.stampEmptyMysqlTeamIds(team.id);
   }
 
   async resolveDefaultTeamId(): Promise<string> {
@@ -48,47 +69,30 @@ export class BootstrapService implements OnModuleInit {
     return team?.id || "";
   }
 
-  /** Stamp empty/missing team_id on YAML resources under data/{pipelines,agents,bridges}. */
-  stampEmptyYamlTeamIds(defaultTeamId: string) {
-    const dirs = [
-      process.env.STUDIO_PIPELINE_DIR ||
-        path.join(process.cwd(), "data", "pipelines"),
-      process.env.STUDIO_DATA_DIR || path.join(process.cwd(), "data", "agents"),
-      process.env.STUDIO_BRIDGE_DIR || path.join(process.cwd(), "data", "bridges"),
-    ];
+  /** Stamp empty team_id on MySQL rows (bridges can register before team prepare). */
+  private async stampEmptyMysqlTeamIds(defaultTeamId: string) {
     let stamped = 0;
-    for (const dir of dirs) {
-      const resolved = path.resolve(dir);
-      if (!fs.existsSync(resolved)) continue;
-      for (const file of fs.readdirSync(resolved)) {
-        if (!file.endsWith(".yaml") || file.startsWith("_")) continue;
-        const fp = path.join(resolved, file);
-        try {
-          const raw = YAML.parse(fs.readFileSync(fp, "utf8")) as Record<
-            string,
-            unknown
-          > | null;
-          if (!raw || typeof raw !== "object") continue;
-          const tid = String(raw.team_id ?? "").trim();
-          if (tid) continue;
-          raw.team_id = defaultTeamId;
-          const header = fs.readFileSync(fp, "utf8").match(/^#.*\n/)?.[0] || "";
-          fs.writeFileSync(
-            fp,
-            `${header || "# Agent Studio\n"}${YAML.stringify(raw, { lineWidth: 100 })}`,
-            "utf8",
-          );
-          stamped += 1;
-        } catch (err) {
-          this.logger.warn(
-            `stamp team_id ${fp}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
+    for (const row of await this.digitalHumans.find()) {
+      if ((row.team_id || "").trim()) continue;
+      row.team_id = defaultTeamId;
+      await this.digitalHumans.save(row);
+      stamped += 1;
+    }
+    for (const row of await this.pipelines.find()) {
+      if ((row.team_id || "").trim()) continue;
+      row.team_id = defaultTeamId;
+      await this.pipelines.save(row);
+      stamped += 1;
+    }
+    for (const row of await this.bridges.find()) {
+      if ((row.team_id || "").trim()) continue;
+      row.team_id = defaultTeamId;
+      await this.bridges.save(row);
+      stamped += 1;
     }
     if (stamped) {
       this.logger.log(
-        `stamped team_id=${defaultTeamId} on ${stamped} YAML resource file(s)`,
+        `stamped team_id=${defaultTeamId} on ${stamped} MySQL resource row(s)`,
       );
     }
   }
@@ -292,6 +296,216 @@ export class BootstrapService implements OnModuleInit {
     if (imported) {
       this.logger.log(
         `migrated ${imported} YAML work order(s) into MySQL; source files kept`,
+      );
+    }
+  }
+
+  private yamlAgentsDir() {
+    return path.resolve(
+      process.env.STUDIO_DATA_DIR || path.join(process.cwd(), "data", "agents"),
+    );
+  }
+
+  private async migrateYamlDigitalHumans(defaultTeamId: string) {
+    const dir = this.yamlAgentsDir();
+    if (!fs.existsSync(dir)) return;
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"));
+    let imported = 0;
+    for (const file of files) {
+      try {
+        const raw = YAML.parse(
+          fs.readFileSync(path.join(dir, file), "utf8"),
+        ) as Record<string, unknown>;
+        const id = String(raw.id || "").trim();
+        if (!id) continue;
+        const exists = await this.digitalHumans.findOne({ where: { id } });
+        if (exists) continue;
+        const teamId = String(raw.team_id || "").trim() || defaultTeamId;
+        const parsed = DigitalHumanSchema.safeParse({
+          ...raw,
+          team_id: teamId,
+        });
+        if (!parsed.success) {
+          this.logger.warn(
+            `skip yaml digital human ${file}: ${parsed.error.message}`,
+          );
+          continue;
+        }
+        const a = parsed.data;
+        await this.digitalHumans.save(
+          this.digitalHumans.create({
+            id: a.id,
+            team_id: a.team_id || teamId,
+            name: a.name,
+            role: a.role,
+            description: a.description || "",
+            responsibilities: a.responsibilities || [],
+            permissions: a.permissions as unknown as Record<string, unknown>,
+            inputs: a.inputs || [],
+            outputs: a.outputs || [],
+            commands: a.commands || [],
+            human_gate_default: a.human_gate_default !== false,
+            prompt_hints: a.prompt_hints || [],
+            enabled: a.enabled !== false,
+            avatar_label: a.avatar_label || "",
+            tags: a.tags || [],
+            dify: (a.dify || {}) as Record<string, unknown>,
+            created_at: a.created_at ? new Date(a.created_at) : undefined,
+            updated_at: a.updated_at ? new Date(a.updated_at) : undefined,
+          }),
+        );
+        imported += 1;
+      } catch (err) {
+        this.logger.warn(
+          `migrate digital human ${file} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (imported) {
+      this.logger.log(
+        `migrated ${imported} YAML digital human(s) into MySQL; source files kept`,
+      );
+    }
+  }
+
+  private yamlPipelinesDir() {
+    return path.resolve(
+      process.env.STUDIO_PIPELINE_DIR ||
+        path.join(process.cwd(), "data", "pipelines"),
+    );
+  }
+
+  private async migrateYamlPipelines(defaultTeamId: string) {
+    const dir = this.yamlPipelinesDir();
+    if (!fs.existsSync(dir)) return;
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"));
+    let imported = 0;
+    for (const file of files) {
+      try {
+        const raw = YAML.parse(
+          fs.readFileSync(path.join(dir, file), "utf8"),
+        ) as Record<string, unknown>;
+        const id = String(raw.id || "").trim();
+        if (!id) continue;
+        const exists = await this.pipelines.findOne({ where: { id } });
+        if (exists) continue;
+        const teamId = String(raw.team_id || "").trim() || defaultTeamId;
+        const parsed = PipelineSchema.safeParse({
+          ...raw,
+          team_id: teamId,
+        });
+        if (!parsed.success) {
+          this.logger.warn(
+            `skip yaml pipeline ${file}: ${parsed.error.message}`,
+          );
+          continue;
+        }
+        const p = parsed.data;
+        await this.pipelines.save(
+          this.pipelines.create({
+            id: p.id,
+            team_id: p.team_id || teamId,
+            name: p.name,
+            description: p.description || "",
+            enabled: p.enabled !== false,
+            tags: p.tags || [],
+            source: (p.source || { kind: "handwritten" }) as Record<
+              string,
+              unknown
+            >,
+            defaults: (p.defaults || {
+              human_approval: true,
+              on_reject: "end",
+            }) as Record<string, unknown>,
+            steps: p.steps || [],
+            dify: (p.dify || {}) as Record<string, unknown>,
+            created_at: p.created_at ? new Date(p.created_at) : undefined,
+            updated_at: p.updated_at ? new Date(p.updated_at) : undefined,
+          }),
+        );
+        imported += 1;
+      } catch (err) {
+        this.logger.warn(
+          `migrate pipeline ${file} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (imported) {
+      this.logger.log(
+        `migrated ${imported} YAML pipeline(s) into MySQL; source files kept`,
+      );
+    }
+  }
+
+  private yamlBridgesDir() {
+    return path.resolve(
+      process.env.STUDIO_BRIDGE_DIR ||
+        path.join(process.cwd(), "data", "bridges"),
+    );
+  }
+
+  private async migrateYamlBridges(defaultTeamId: string) {
+    const dir = this.yamlBridgesDir();
+    if (!fs.existsSync(dir)) return;
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"));
+    let imported = 0;
+    for (const file of files) {
+      try {
+        const raw = YAML.parse(
+          fs.readFileSync(path.join(dir, file), "utf8"),
+        ) as Record<string, unknown>;
+        const id = String(raw.id || "").trim();
+        if (!id) continue;
+        const exists = await this.bridges.findOne({ where: { id } });
+        if (exists) continue;
+        const teamId = String(raw.team_id || "").trim() || defaultTeamId;
+        const parsed = BridgeExecutorSchema.safeParse({
+          ...raw,
+          team_id: teamId,
+        });
+        if (!parsed.success) {
+          this.logger.warn(
+            `skip yaml bridge ${file}: ${parsed.error.message}`,
+          );
+          continue;
+        }
+        const b = parsed.data;
+        await this.bridges.save(
+          this.bridges.create({
+            id: b.id,
+            team_id: b.team_id || teamId,
+            name: b.name,
+            base_url: b.base_url.replace(/\/$/, ""),
+            driver: b.driver || "auto",
+            driver_label: b.driver_label || "",
+            dry_run: Boolean(b.dry_run),
+            model: b.model || "",
+            platform: b.platform || "",
+            available_drivers: b.available_drivers || [],
+            status: b.status || "offline",
+            current_run_id: b.current_run_id || "",
+            last_seen_at: b.last_seen_at || "",
+            note: b.note || "",
+            created_at: b.created_at ? new Date(b.created_at) : undefined,
+            updated_at: b.updated_at ? new Date(b.updated_at) : undefined,
+          }),
+        );
+        imported += 1;
+      } catch (err) {
+        this.logger.warn(
+          `migrate bridge ${file} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (imported) {
+      this.logger.log(
+        `migrated ${imported} YAML bridge(s) into MySQL; source files kept`,
       );
     }
   }

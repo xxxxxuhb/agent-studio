@@ -21,7 +21,7 @@ Wait until health is healthy (`mysqladmin ping` via compose healthcheck).
 mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
 ```
 
-Idempotent. Tables: `users`, `teams`, `team_members`, `projects`, `work_orders`, `run_logs`, `run_log_entries`.
+Idempotent. Tables: `users`, `teams`, `team_members`, `projects`, `work_orders`, `run_logs`, `run_log_entries`, `digital_humans`, `pipelines`, `bridges`.
 
 ## Studio API `.env`
 

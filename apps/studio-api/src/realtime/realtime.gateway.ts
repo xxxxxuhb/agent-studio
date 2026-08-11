@@ -72,9 +72,9 @@ export class RealtimeGateway
   }
 
   @SubscribeMessage("subscribe_bridges")
-  subscribeBridges(@ConnectedSocket() client: Socket) {
+  async subscribeBridges(@ConnectedSocket() client: Socket) {
     client.join("bridges:watch");
-    const items = this.bridges.list();
+    const items = await this.bridges.list();
     client.emit("bridges", { items });
     return { ok: true, total: items.length };
   }

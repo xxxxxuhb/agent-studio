@@ -27,7 +27,7 @@ async function bootstrap() {
   const defaultTeamId = await boot.resolveDefaultTeamId();
 
   const humans = app.get(DigitalHumansService);
-  const seeded = humans.seedDefaults(defaultTeamId);
+  const seeded = await humans.seedDefaults(defaultTeamId);
   if (seeded.imported.length) {
     console.log(`seeded/imported digital humans: ${seeded.imported.join(", ")}`);
   }
@@ -36,14 +36,9 @@ async function bootstrap() {
   }
 
   const pipelines = app.get(PipelinesService);
-  if (pipelines.list().length === 0) {
-    const seededPipes = pipelines.seedDefaults(defaultTeamId);
+  if ((await pipelines.list()).length === 0) {
+    const seededPipes = await pipelines.seedDefaults(defaultTeamId);
     console.log(`seeded ${seededPipes.imported.length} pipelines`);
-  }
-
-  // Re-stamp in case seed created files after BootstrapService.onModuleInit.
-  if (defaultTeamId) {
-    boot.stampEmptyYamlTeamIds(defaultTeamId);
   }
 
   const port = Number(process.env.STUDIO_API_PORT || 8790);

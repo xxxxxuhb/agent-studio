@@ -20,6 +20,10 @@ import { composePipelineWithAgent } from "./pipelineCompose.js";
 import { connectStudioLink, type StudioLink } from "./studioLink.js";
 import { StageSchema } from "./types.js";
 import { bridgeHttpToken, requireBridgeHttpAuth } from "./httpAuth.js";
+import {
+  bridgeReposRoot,
+  ensureWorkspaceOnBridge,
+} from "./workspaceEnsure.js";
 
 export type StartBridgeOptions = {
   port?: number;
@@ -102,6 +106,7 @@ export function createBridgeApp() {
       platform: process.platform,
       status: activeRuns > 0 ? "busy" : "online",
       activeRuns,
+      reposRoot: bridgeReposRoot(),
     };
   });
 
@@ -110,6 +115,34 @@ export function createBridgeApp() {
   app.get("/runs/:id", async (req) => {
     const { id } = req.params as { id: string };
     return getRun(id);
+  });
+
+  app.post("/workspace/ensure", async (req) => {
+    const body = z
+      .object({
+        project_id: z.string().min(1),
+        project_name: z.string().optional(),
+        repos: z
+          .array(
+            z.object({
+              id: z.string().min(1),
+              remote_url: z.string().min(1),
+              name: z.string().optional(),
+              role: z.string().optional(),
+              default_branch: z.string().optional(),
+              note: z.string().optional(),
+            }),
+          )
+          .min(1),
+      })
+      .parse(req.body);
+    return trackBusy("workspace-ensure", () =>
+      ensureWorkspaceOnBridge({
+        project_id: body.project_id,
+        project_name: body.project_name,
+        repos: body.repos,
+      }),
+    );
   });
 
   app.post("/routing/select", async (req) => {

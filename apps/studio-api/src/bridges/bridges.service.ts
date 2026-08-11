@@ -5,10 +5,10 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
+import { Repository } from "typeorm";
 import {
   BridgeExecutorSchema,
   BridgeHeartbeatSchema,
@@ -19,6 +19,7 @@ import {
 } from "@agent-studio/agent-schema";
 import { RealtimeHub } from "../realtime/realtime.hub";
 import { TeamsService } from "../teams/teams.service";
+import { BridgeEntity } from "./entities/bridge.entity";
 
 function shellQuote(value: string): string {
   if (/^[a-zA-Z0-9._/:@%+=-]+$/.test(value)) return value;
@@ -27,10 +28,13 @@ function shellQuote(value: string): string {
 
 @Injectable()
 export class BridgesService implements OnModuleInit {
+  /** Legacy YAML dir (bootstrap import only). */
   private dataDir = "";
   private expectedToken = "";
 
   constructor(
+    @InjectRepository(BridgeEntity)
+    private readonly repo: Repository<BridgeEntity>,
     private readonly realtime: RealtimeHub,
     private readonly teams: TeamsService,
   ) {}
@@ -45,15 +49,56 @@ export class BridgesService implements OnModuleInit {
       process.env.BRIDGE_TOKEN ||
       ""
     ).trim();
-    fs.mkdirSync(this.dataDir, { recursive: true });
   }
 
-  private filePath(id: string) {
-    return path.join(this.dataDir, `${id}.yaml`);
+  getDataDir() {
+    return this.dataDir;
   }
 
   private nowIso() {
     return new Date().toISOString();
+  }
+
+  private toBridge(entity: BridgeEntity): BridgeExecutor {
+    return BridgeExecutorSchema.parse({
+      id: entity.id,
+      team_id: entity.team_id || "",
+      name: entity.name,
+      base_url: entity.base_url,
+      driver: entity.driver || "auto",
+      driver_label: entity.driver_label || "",
+      dry_run: Boolean(entity.dry_run),
+      model: entity.model || "",
+      platform: entity.platform || "",
+      available_drivers: entity.available_drivers || [],
+      status: entity.status || "offline",
+      current_run_id: entity.current_run_id || "",
+      last_seen_at: entity.last_seen_at || undefined,
+      note: entity.note || "",
+      created_at: entity.created_at?.toISOString?.() || undefined,
+      updated_at: entity.updated_at?.toISOString?.() || undefined,
+    });
+  }
+
+  private toEntityFields(bridge: BridgeExecutor): Partial<BridgeEntity> {
+    return {
+      id: bridge.id,
+      team_id: (bridge.team_id || "").trim(),
+      name: bridge.name,
+      base_url: bridge.base_url.replace(/\/$/, ""),
+      driver: bridge.driver || "auto",
+      driver_label: bridge.driver_label || "",
+      dry_run: Boolean(bridge.dry_run),
+      model: bridge.model || "",
+      platform: bridge.platform || "",
+      available_drivers: bridge.available_drivers || [],
+      status: bridge.status || "offline",
+      current_run_id: bridge.current_run_id || "",
+      last_seen_at: bridge.last_seen_at || "",
+      note: bridge.note || "",
+      created_at: bridge.created_at ? new Date(bridge.created_at) : undefined,
+      updated_at: bridge.updated_at ? new Date(bridge.updated_at) : undefined,
+    };
   }
 
   private inScopedTeams(teamId: string | undefined, scoped: string[]) {
@@ -89,21 +134,37 @@ export class BridgesService implements OnModuleInit {
     return `br-${digest}`;
   }
 
-  list(filters?: { status?: string }) {
-    const files = fs
-      .readdirSync(this.dataDir)
-      .filter((f) => f.endsWith(".yaml"));
-    let items = files.map((f) =>
-      BridgeExecutorSchema.parse(
-        YAML.parse(fs.readFileSync(path.join(this.dataDir, f), "utf8")),
-      ),
-    );
+  async list(filters?: { status?: string }) {
+    let items = (await this.repo.find()).map((e) => this.toBridge(e));
     if (filters?.status && filters.status !== "all") {
       items = items.filter((b) => b.status === filters.status);
     }
     return items.sort((a, b) =>
       (b.last_seen_at || "").localeCompare(a.last_seen_at || ""),
     );
+  }
+
+  /**
+   * Prefer an online/busy registered executor's public base_url for Studio→Bridge HTTP.
+   * Optional teamId scopes to that team; otherwise any reachable executor.
+   */
+  async pickRegisteredBaseUrl(opts?: {
+    teamId?: string;
+  }): Promise<string | undefined> {
+    const teamId = (opts?.teamId || "").trim();
+    const candidates = (await this.list()).filter((b) => {
+      if (b.status !== "online" && b.status !== "busy") return false;
+      if (!b.base_url?.trim()) return false;
+      if (teamId && (b.team_id || "").trim() && b.team_id !== teamId) {
+        return false;
+      }
+      return true;
+    });
+    const preferred = teamId
+      ? candidates.find((b) => (b.team_id || "").trim() === teamId) ||
+        candidates[0]
+      : candidates[0];
+    return preferred?.base_url?.replace(/\/$/, "") || undefined;
   }
 
   async listForUser(
@@ -115,49 +176,62 @@ export class BridgesService implements OnModuleInit {
       filters?.team_id,
     );
     if (!scoped.length) return [];
-    return this.list(filters).filter((b) =>
+    return (await this.list(filters)).filter((b) =>
       this.inScopedTeams(b.team_id, scoped),
     );
   }
 
-  get(id: string): BridgeExecutor {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`bridge not found: ${id}`);
-    return BridgeExecutorSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
+  async get(id: string): Promise<BridgeExecutor> {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException(`bridge not found: ${id}`);
+    return this.toBridge(entity);
   }
 
   async getForUser(userId: string, id: string): Promise<BridgeExecutor> {
-    const bridge = this.get(id);
+    const bridge = await this.get(id);
     await this.assertReadable(userId, bridge);
     return bridge;
   }
 
-  private write(bridge: BridgeExecutor, broadcast = true): BridgeExecutor {
+  private async write(
+    bridge: BridgeExecutor,
+    broadcast = true,
+  ): Promise<BridgeExecutor> {
+    const stamp = this.nowIso();
+    const existing = await this.repo.findOne({ where: { id: bridge.id } });
     const next = BridgeExecutorSchema.parse({
       ...bridge,
-      updated_at: this.nowIso(),
-      created_at: bridge.created_at || this.nowIso(),
+      updated_at: stamp,
+      created_at:
+        bridge.created_at ||
+        existing?.created_at?.toISOString?.() ||
+        stamp,
     });
-    fs.writeFileSync(
-      this.filePath(next.id),
-      `# Bridge executor ${next.id}\n${YAML.stringify(next, { lineWidth: 100 })}`,
-      "utf8",
-    );
-    if (broadcast) {
-      this.realtime.publishBridge(next);
-      this.realtime.publishBridges(this.list());
+    const fields = this.toEntityFields(next);
+    if (existing) {
+      Object.assign(existing, fields, {
+        created_at: existing.created_at,
+        updated_at: new Date(stamp),
+      });
+      await this.repo.save(existing);
+    } else {
+      await this.repo.save(this.repo.create(fields));
     }
-    return next;
+    const saved = await this.get(next.id);
+    if (broadcast) {
+      this.realtime.publishBridge(saved);
+      this.realtime.publishBridges(await this.list());
+    }
+    return saved;
   }
 
-  register(input: unknown): BridgeExecutor {
+  async register(input: unknown): Promise<BridgeExecutor> {
     const body = BridgeRegisterSchema.parse(input);
     this.assertToken(body.token);
     const id = body.id?.trim() || this.idFromName(body.name, body.base_url);
-    const existing = fs.existsSync(this.filePath(id)) ? this.get(id) : null;
+    const existing = await this.repo.findOne({ where: { id } });
     return this.write({
       id,
-      // Machine auth: preserve team from prepare/bootstrap; new = "" until stamped.
       team_id: existing?.team_id || "",
       name: body.name,
       base_url: body.base_url.replace(/\/$/, ""),
@@ -170,13 +244,13 @@ export class BridgesService implements OnModuleInit {
       status: body.status || "online",
       current_run_id: "",
       last_seen_at: this.nowIso(),
-      created_at: existing?.created_at,
+      created_at: existing?.created_at?.toISOString?.(),
       note: existing?.note || "",
     });
   }
 
   /** Upsert from WebSocket without requiring HTTP body schema token twice. */
-  connectFromWs(input: {
+  async connectFromWs(input: {
     token: string;
     name: string;
     base_url: string;
@@ -187,14 +261,14 @@ export class BridgesService implements OnModuleInit {
     platform?: string;
     available_drivers?: string[];
     id?: string;
-  }): BridgeExecutor {
+  }): Promise<BridgeExecutor> {
     return this.register({
       ...input,
       status: "online",
     });
   }
 
-  setStatus(
+  async setStatus(
     id: string,
     patch: {
       status: BridgeStatus;
@@ -205,8 +279,8 @@ export class BridgesService implements OnModuleInit {
       dry_run?: boolean;
       model?: string;
     },
-  ): BridgeExecutor {
-    const current = this.get(id);
+  ): Promise<BridgeExecutor> {
+    const current = await this.get(id);
     return this.write({
       ...current,
       ...patch,
@@ -222,7 +296,7 @@ export class BridgesService implements OnModuleInit {
     });
   }
 
-  heartbeat(id: string, input: unknown): BridgeExecutor {
+  async heartbeat(id: string, input: unknown): Promise<BridgeExecutor> {
     const body = BridgeHeartbeatSchema.parse(input);
     this.assertToken(body.token);
     return this.setStatus(id, {
@@ -236,24 +310,24 @@ export class BridgesService implements OnModuleInit {
     });
   }
 
-  markOffline(id: string): BridgeExecutor | null {
+  async markOffline(id: string): Promise<BridgeExecutor | null> {
     try {
-      return this.setStatus(id, { status: "offline", current_run_id: "" });
+      return await this.setStatus(id, { status: "offline", current_run_id: "" });
     } catch {
       return null;
     }
   }
 
-  remove(id: string) {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`bridge not found: ${id}`);
-    fs.unlinkSync(fp);
-    this.realtime.publishBridges(this.list());
+  async remove(id: string) {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException(`bridge not found: ${id}`);
+    await this.repo.remove(entity);
+    this.realtime.publishBridges(await this.list());
     return { ok: true, id };
   }
 
   async removeForUser(userId: string, id: string) {
-    const current = this.get(id);
+    const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
     return this.remove(id);
@@ -263,22 +337,24 @@ export class BridgesService implements OnModuleInit {
    * UI “添加执行器”：预登记一条 offline 记录，并生成可复制的 npx 启动命令。
    * 执行器连上 WS 后会按 name+base_url 更新为 online。
    */
-  prepare(input: unknown): {
+  async prepare(input: unknown): Promise<{
     bridge: BridgeExecutor;
     install_command: string;
     local_command: string;
     auth_mode: string;
-    /** Env var name to prefix when auth_mode=key (client fills value; never stored here) */
     agent_env_key: string;
     token_configured: boolean;
-  } {
+  }> {
     const body = BridgePrepareSchema.parse(input);
     const baseUrl = body.base_url.replace(/\/$/, "");
     const studioUrl = body.studio_url.replace(/\/$/, "");
     const id = this.idFromName(body.name, baseUrl);
-    const existing = fs.existsSync(this.filePath(id)) ? this.get(id) : null;
+    const existingEntity = await this.repo.findOne({ where: { id } });
+    const existing = existingEntity
+      ? this.toBridge(existingEntity)
+      : null;
     const authMode = body.auth_mode || "none";
-    const bridge = this.write({
+    const bridge = await this.write({
       id,
       team_id: body.team_id,
       name: body.name,
@@ -289,9 +365,10 @@ export class BridgesService implements OnModuleInit {
       model: existing?.model || "",
       platform: existing?.platform || "",
       available_drivers: existing?.available_drivers || [],
-      status: existing?.status === "online" || existing?.status === "busy"
-        ? existing.status
-        : "offline",
+      status:
+        existing?.status === "online" || existing?.status === "busy"
+          ? existing.status
+          : "offline",
       current_run_id: existing?.current_run_id || "",
       last_seen_at: existing?.last_seen_at,
       created_at: existing?.created_at,
@@ -315,7 +392,10 @@ export class BridgesService implements OnModuleInit {
       "--public-url",
       shellQuote(baseUrl),
     ];
-    if (authMode === "login" && (body.driver === "cursor" || body.driver === "auto")) {
+    if (
+      authMode === "login" &&
+      (body.driver === "cursor" || body.driver === "auto")
+    ) {
       argParts.push("--login");
     }
     const args = argParts.join(" ");

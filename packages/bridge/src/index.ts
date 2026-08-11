@@ -15,3 +15,8 @@ export {
 } from "./orchestrator.js";
 export { managerSelectRepos } from "./managerSelect.js";
 export { connectStudioLink, type StudioLink } from "./studioLink.js";
+export {
+  ensureWorkspaceOnBridge,
+  bridgeReposRoot,
+  resolveBridgeRepoPath,
+} from "./workspaceEnsure.js";

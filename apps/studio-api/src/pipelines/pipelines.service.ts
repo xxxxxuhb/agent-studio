@@ -3,11 +3,10 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
-  OnModuleInit,
 } from "@nestjs/common";
-import fs from "node:fs";
+import { InjectRepository } from "@nestjs/typeorm";
 import path from "node:path";
-import YAML from "yaml";
+import { Repository } from "typeorm";
 import {
   PipelineComposeSchema,
   PipelineCreateSchema,
@@ -25,6 +24,7 @@ import { DifyConfigService } from "../dify/dify-config.service";
 import { TeamsService } from "../teams/teams.service";
 import { bridgeAuthHeaders } from "../bridges/bridge-http";
 import { DEFAULT_PIPELINES, composePipelineFromPrompt } from "./defaults";
+import { PipelineEntity } from "./entities/pipeline.entity";
 
 function resolveBridgeBaseUrl(configured?: string): string {
   return (
@@ -33,50 +33,82 @@ function resolveBridgeBaseUrl(configured?: string): string {
 }
 
 @Injectable()
-export class PipelinesService implements OnModuleInit {
+export class PipelinesService {
+  /** Legacy YAML dir (bootstrap import only). */
   private dataDir = path.resolve(
     process.env.STUDIO_PIPELINE_DIR ||
       path.join(process.cwd(), "data", "pipelines"),
   );
 
   constructor(
+    @InjectRepository(PipelineEntity)
+    private readonly repo: Repository<PipelineEntity>,
     private readonly humans: DigitalHumansService,
     private readonly difyConfig: DifyConfigService,
     private readonly teams: TeamsService,
   ) {}
 
-  onModuleInit() {
-    this.dataDir = path.resolve(
-      process.env.STUDIO_PIPELINE_DIR ||
-        path.join(process.cwd(), "data", "pipelines"),
-    );
-    fs.mkdirSync(this.dataDir, { recursive: true });
-  }
-
   getDataDir() {
-    fs.mkdirSync(this.dataDir, { recursive: true });
     return this.dataDir;
-  }
-
-  private filePath(id: string) {
-    return path.join(this.getDataDir(), `${id}.yaml`);
   }
 
   private nowIso() {
     return new Date().toISOString();
   }
 
-  private assertAgentsExist(steps: Pipeline["steps"]) {
-    const missing = steps
-      .map((s) => s.agent)
-      .filter((agentId) => {
-        try {
-          this.humans.get(agentId);
-          return false;
-        } catch {
-          return true;
-        }
-      });
+  private toPipeline(entity: PipelineEntity): Pipeline {
+    return PipelineSchema.parse({
+      id: entity.id,
+      team_id: entity.team_id || "",
+      name: entity.name,
+      description: entity.description || "",
+      enabled: entity.enabled !== false,
+      tags: entity.tags || [],
+      source: entity.source || { kind: "handwritten" },
+      defaults: entity.defaults || { human_approval: true, on_reject: "end" },
+      steps: entity.steps || [],
+      dify: entity.dify || {},
+      created_at: entity.created_at?.toISOString?.() || undefined,
+      updated_at: entity.updated_at?.toISOString?.() || undefined,
+    });
+  }
+
+  private toEntityFields(pipeline: Pipeline): Partial<PipelineEntity> {
+    return {
+      id: pipeline.id,
+      team_id: (pipeline.team_id || "").trim(),
+      name: pipeline.name,
+      description: pipeline.description || "",
+      enabled: pipeline.enabled !== false,
+      tags: pipeline.tags || [],
+      source: (pipeline.source || { kind: "handwritten" }) as Record<
+        string,
+        unknown
+      >,
+      defaults: (pipeline.defaults || {
+        human_approval: true,
+        on_reject: "end",
+      }) as Record<string, unknown>,
+      steps: pipeline.steps || [],
+      dify: (pipeline.dify || {}) as Record<string, unknown>,
+      created_at: pipeline.created_at
+        ? new Date(pipeline.created_at)
+        : undefined,
+      updated_at: pipeline.updated_at
+        ? new Date(pipeline.updated_at)
+        : undefined,
+    };
+  }
+
+  private async assertAgentsExist(steps: Pipeline["steps"]) {
+    const missing: string[] = [];
+    for (const s of steps) {
+      try {
+        await this.humans.get(s.agent);
+      } catch {
+        missing.push(s.agent);
+      }
+    }
     const unique = [...new Set(missing)];
     if (unique.length) {
       throw new BadRequestException(`未知数字人: ${unique.join(", ")}`);
@@ -97,15 +129,10 @@ export class PipelinesService implements OnModuleInit {
     await this.teams.requireMember(tid, userId);
   }
 
-  list(filters?: { enabled?: "true" | "false" | "all"; q?: string }) {
-    const dir = this.getDataDir();
-    const files = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"));
-    let items = files.map((file) => {
-      const raw = fs.readFileSync(path.join(dir, file), "utf8");
-      return this.toPublic(PipelineSchema.parse(YAML.parse(raw)));
-    });
+  async list(filters?: { enabled?: "true" | "false" | "all"; q?: string }) {
+    let items = (await this.repo.find()).map((e) =>
+      this.toPublic(this.toPipeline(e)),
+    );
 
     const enabled = filters?.enabled ?? "all";
     if (enabled === "true") items = items.filter((p) => p.enabled);
@@ -136,29 +163,29 @@ export class PipelinesService implements OnModuleInit {
       filters?.team_id,
     );
     if (!scoped.length) return [];
-    return this.list(filters).filter((p) =>
+    return (await this.list(filters)).filter((p) =>
       this.inScopedTeams(p.team_id, scoped),
     );
   }
 
-  get(id: string): Pipeline {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`not found: ${id}`);
-    return PipelineSchema.parse(YAML.parse(fs.readFileSync(fp, "utf8")));
+  async get(id: string): Promise<Pipeline> {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException(`not found: ${id}`);
+    return this.toPipeline(entity);
   }
 
-  getPublic(id: string) {
-    return this.toPublic(this.get(id));
+  async getPublic(id: string) {
+    return this.toPublic(await this.get(id));
   }
 
   async getPublicForUser(userId: string, id: string) {
-    const pipeline = this.get(id);
+    const pipeline = await this.get(id);
     await this.assertReadable(userId, pipeline);
     return this.toPublic(pipeline);
   }
 
   async getForUser(userId: string, id: string): Promise<Pipeline> {
-    const pipeline = this.get(id);
+    const pipeline = await this.get(id);
     await this.assertReadable(userId, pipeline);
     return pipeline;
   }
@@ -179,26 +206,32 @@ export class PipelinesService implements OnModuleInit {
     });
   }
 
-  create(input: PipelineCreate): PipelinePublic {
+  async create(input: PipelineCreate): Promise<PipelinePublic> {
     let body: PipelineCreate;
     try {
       body = PipelineCreateSchema.parse(input);
     } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+      throw new BadRequestException(
+        err instanceof Error ? err.message : String(err),
+      );
     }
-    if (fs.existsSync(this.filePath(body.id))) {
-      throw new ConflictException(`already exists: ${body.id}`);
-    }
-    this.assertAgentsExist(body.steps);
-    return this.toPublic(this.write(body as Pipeline));
+    const exists = await this.repo.findOne({ where: { id: body.id } });
+    if (exists) throw new ConflictException(`already exists: ${body.id}`);
+    await this.assertAgentsExist(body.steps);
+    return this.toPublic(await this.write(body as Pipeline));
   }
 
-  async createForUser(userId: string, input: PipelineCreate): Promise<PipelinePublic> {
+  async createForUser(
+    userId: string,
+    input: PipelineCreate,
+  ): Promise<PipelinePublic> {
     let body: PipelineCreate;
     try {
       body = PipelineCreateSchema.parse(input);
     } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+      throw new BadRequestException(
+        err instanceof Error ? err.message : String(err),
+      );
     }
     const teamId = (body.team_id || "").trim();
     if (!teamId) {
@@ -208,8 +241,8 @@ export class PipelinesService implements OnModuleInit {
     return this.create({ ...body, team_id: teamId });
   }
 
-  update(id: string, patch: PipelineUpdate): PipelinePublic {
-    const current = this.get(id);
+  async update(id: string, patch: PipelineUpdate): Promise<PipelinePublic> {
+    const current = await this.get(id);
     try {
       const parsed = PipelineUpdateSchema.parse(patch);
       const nextDify = {
@@ -230,11 +263,13 @@ export class PipelinesService implements OnModuleInit {
         steps: parsed.steps || current.steps,
         dify: nextDify,
       });
-      this.assertAgentsExist(merged.steps);
-      return this.toPublic(this.write(merged));
+      await this.assertAgentsExist(merged.steps);
+      return this.toPublic(await this.write(merged));
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
-      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+      throw new BadRequestException(
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -243,14 +278,16 @@ export class PipelinesService implements OnModuleInit {
     id: string,
     patch: PipelineUpdate,
   ): Promise<PipelinePublic> {
-    const current = this.get(id);
+    const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
     return this.update(id, patch);
   }
 
-  setEnabled(id: string, enabled: boolean): PipelinePublic {
-    return this.toPublic(this.write({ ...this.get(id), enabled }));
+  async setEnabled(id: string, enabled: boolean): Promise<PipelinePublic> {
+    return this.toPublic(
+      await this.write({ ...(await this.get(id)), enabled }),
+    );
   }
 
   async setEnabledForUser(
@@ -258,37 +295,40 @@ export class PipelinesService implements OnModuleInit {
     id: string,
     enabled: boolean,
   ): Promise<PipelinePublic> {
-    const current = this.get(id);
+    const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
     return this.setEnabled(id, enabled);
   }
 
-  remove(id: string) {
-    const fp = this.filePath(id);
-    if (!fs.existsSync(fp)) throw new NotFoundException(`not found: ${id}`);
-    fs.unlinkSync(fp);
+  async remove(id: string) {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException(`not found: ${id}`);
+    await this.repo.remove(entity);
     return { ok: true as const, id };
   }
 
   async removeForUser(userId: string, id: string) {
-    const current = this.get(id);
+    const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
     return this.remove(id);
   }
 
-  seedDefaults(teamId = "") {
+  async seedDefaults(teamId = "") {
     const imported: string[] = [];
     const skipped: string[] = [];
     for (const item of DEFAULT_PIPELINES) {
-      if (fs.existsSync(this.filePath(item.id))) {
+      const exists = await this.repo.findOne({ where: { id: item.id } });
+      if (exists) {
         skipped.push(item.id);
         continue;
       }
       try {
-        this.assertAgentsExist(item.steps);
-        this.write(PipelineSchema.parse({ ...item, team_id: teamId || "" }));
+        await this.assertAgentsExist(item.steps);
+        await this.write(
+          PipelineSchema.parse({ ...item, team_id: teamId || "" }),
+        );
         imported.push(item.id);
       } catch (err) {
         throw new BadRequestException(
@@ -296,7 +336,12 @@ export class PipelinesService implements OnModuleInit {
         );
       }
     }
-    return { imported, skipped, total: this.list().length, dataDir: this.getDataDir() };
+    return {
+      imported,
+      skipped,
+      total: (await this.list()).length,
+      dataDir: this.dataDir,
+    };
   }
 
   async seedDefaultsForUser(userId: string, teamId: string) {
@@ -308,7 +353,6 @@ export class PipelinesService implements OnModuleInit {
 
   async compose(input: unknown) {
     const body = PipelineComposeSchema.parse(input);
-    // Shared hard rule before agent or rules.
     const lower = body.prompt.toLowerCase();
     if (/生产|production|prod/.test(lower) && /发布|部署|上线/.test(body.prompt)) {
       throw new BadRequestException(
@@ -346,7 +390,6 @@ export class PipelinesService implements OnModuleInit {
     if (body.id) draft.id = body.id;
     if (body.name) draft.name = body.name;
     if (body.team_id) draft.team_id = body.team_id;
-    // Ensure NL provenance
     draft.source = {
       kind: "nl",
       nl_prompt: body.prompt,
@@ -354,13 +397,16 @@ export class PipelinesService implements OnModuleInit {
         draft.source?.template_id ||
         (generatedBy === "agent" ? "agent" : draft.source?.template_id),
     };
-    this.assertAgentsExist(draft.steps);
+    await this.assertAgentsExist(draft.steps);
     if (body.save) {
-      if (fs.existsSync(this.filePath(draft.id))) {
+      const exists = await this.repo.findOne({ where: { id: draft.id } });
+      if (exists) {
         throw new ConflictException(`already exists: ${draft.id}`);
       }
       return {
-        draft: this.toPublic(this.write(PipelineSchema.parse(draft))),
+        draft: this.toPublic(
+          await this.write(PipelineSchema.parse(draft)),
+        ),
         saved: true,
         generated_by: generatedBy,
         ...agentMeta,
@@ -384,7 +430,6 @@ export class PipelinesService implements OnModuleInit {
       await this.teams.requireWritableMember(teamId, userId);
       return this.compose({ ...body, team_id: teamId });
     }
-    // Draft-only: still scope team_id if provided (membership check optional for preview)
     if (body.team_id?.trim()) {
       await this.teams.assertTeamAccess(body.team_id.trim(), userId);
     }
@@ -400,14 +445,12 @@ export class PipelinesService implements OnModuleInit {
       }
     | { ok: false; reason: string }
   > {
-    const agents = this.humans
-      .list({ enabled: "true" })
-      .map((h) => ({
-        id: h.id,
-        name: h.name,
-        role: h.role,
-        description: h.description || "",
-      }));
+    const agents = (await this.humans.list({ enabled: "true" })).map((h) => ({
+      id: h.id,
+      name: h.name,
+      role: h.role,
+      description: h.description || "",
+    }));
     if (!agents.length) {
       return { ok: false, reason: "no enabled digital humans" };
     }
@@ -441,7 +484,7 @@ export class PipelinesService implements OnModuleInit {
       let draft: PipelineCreate;
       try {
         draft = PipelineCreateSchema.parse(data.draft);
-        this.assertAgentsExist(draft.steps);
+        await this.assertAgentsExist(draft.steps);
       } catch (err) {
         return {
           ok: false,
@@ -462,21 +505,27 @@ export class PipelinesService implements OnModuleInit {
     }
   }
 
-  private write(pipeline: Pipeline): Pipeline {
+  private async write(pipeline: Pipeline): Promise<Pipeline> {
     const stamp = this.nowIso();
-    const existing = fs.existsSync(this.filePath(pipeline.id))
-      ? this.get(pipeline.id)
-      : null;
+    const existing = await this.repo.findOne({ where: { id: pipeline.id } });
     const next = PipelineSchema.parse({
       ...pipeline,
-      created_at: pipeline.created_at || existing?.created_at || stamp,
+      created_at:
+        pipeline.created_at ||
+        existing?.created_at?.toISOString?.() ||
+        stamp,
       updated_at: stamp,
     });
-    fs.writeFileSync(
-      this.filePath(next.id),
-      `# Agent Studio pipeline\n${YAML.stringify(next, { lineWidth: 100 })}`,
-      "utf8",
-    );
-    return next;
+    const fields = this.toEntityFields(next);
+    if (existing) {
+      Object.assign(existing, fields, {
+        created_at: existing.created_at,
+        updated_at: new Date(stamp),
+      });
+      await this.repo.save(existing);
+    } else {
+      await this.repo.save(this.repo.create(fields));
+    }
+    return this.get(next.id);
   }
 }

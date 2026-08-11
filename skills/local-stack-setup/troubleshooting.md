@@ -17,6 +17,6 @@
 | Commit author is personal name | Bot env not loaded / not forced | Restart Bridge; `BRIDGE_GIT_FORCE_AUTHOR=true` |
 | Push OK, no MR | Missing/invalid `GITLAB_TOKEN` or API URL | Token needs `api`; set `BRIDGE_GITLAB_API` / `WEB` |
 | Studio can’t talk to Dify | Wrong `api_base` / App Key | `http://localhost/v1` + `app-...` |
-| Run logs / work orders missing after upgrade | Old YAML only | Restart API once so bootstrap migrates; confirm MySQL tables |
+| Run logs / work orders / pipelines / humans / bridges missing after upgrade | Old YAML only | Restart API once so bootstrap migrates; confirm MySQL tables |
 
 Do not dig through unrelated personal repos unless the user points to them.

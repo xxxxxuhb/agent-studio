@@ -70,6 +70,7 @@ STUDIO_URL=http://127.0.0.1:8790
 STUDIO_BRIDGE_TOKEN=dev-bridge-token
 BRIDGE_HTTP_TOKEN=dev-bridge-token
 BRIDGE_PUBLIC_URL=http://127.0.0.1:8787
+BRIDGE_REPOS_DIR=~/AgentStudio
 
 BRIDGE_GIT_AUTHOR_NAME=agent-studio-bot
 BRIDGE_GIT_AUTHOR_EMAIL=bot@agent-studio.local

@@ -1,6 +1,9 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { UserEntity } from "../auth/entities/user.entity";
+import { BridgeEntity } from "../bridges/entities/bridge.entity";
+import { DigitalHumanEntity } from "../digital-humans/entities/digital-human.entity";
+import { PipelineEntity } from "../pipelines/entities/pipeline.entity";
 import { ProjectEntity } from "../projects/entities/project.entity";
 import { RunLogEntryEntity } from "../run-logs/entities/run-log-entry.entity";
 import { RunLogMetaEntity } from "../run-logs/entities/run-log-meta.entity";
@@ -30,6 +33,9 @@ function mysqlConfig() {
         WorkOrderEntity,
         RunLogMetaEntity,
         RunLogEntryEntity,
+        DigitalHumanEntity,
+        PipelineEntity,
+        BridgeEntity,
       ],
       synchronize: process.env.STUDIO_MYSQL_SYNC === "true",
       logging: process.env.STUDIO_MYSQL_LOGGING === "true",

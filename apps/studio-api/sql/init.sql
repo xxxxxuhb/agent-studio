@@ -135,6 +135,74 @@ CREATE TABLE IF NOT EXISTS `run_log_entries` (
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `digital_humans` (
+  `id` varchar(64) NOT NULL,
+  `team_id` varchar(36) NOT NULL,
+  `name` varchar(128) NOT NULL,
+  `role` varchar(64) NOT NULL,
+  `description` text NOT NULL,
+  `responsibilities` json NOT NULL,
+  `permissions` json NOT NULL,
+  `inputs` json NOT NULL,
+  `outputs` json NOT NULL,
+  `commands` json NOT NULL,
+  `human_gate_default` tinyint NOT NULL DEFAULT 1,
+  `prompt_hints` json NOT NULL,
+  `enabled` tinyint NOT NULL DEFAULT 1,
+  `avatar_label` varchar(64) NOT NULL DEFAULT '',
+  `tags` json NOT NULL,
+  `dify` json NOT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  KEY `IDX_digital_humans_team_id` (`team_id`),
+  CONSTRAINT `FK_digital_humans_team`
+    FOREIGN KEY (`team_id`) REFERENCES `teams` (`id`)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `pipelines` (
+  `id` varchar(64) NOT NULL,
+  `team_id` varchar(36) NOT NULL,
+  `name` varchar(128) NOT NULL,
+  `description` text NOT NULL,
+  `enabled` tinyint NOT NULL DEFAULT 1,
+  `tags` json NOT NULL,
+  `source` json NOT NULL,
+  `defaults` json NOT NULL,
+  `steps` json NOT NULL,
+  `dify` json NOT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  KEY `IDX_pipelines_team_id` (`team_id`),
+  CONSTRAINT `FK_pipelines_team`
+    FOREIGN KEY (`team_id`) REFERENCES `teams` (`id`)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `bridges` (
+  `id` varchar(64) NOT NULL,
+  `team_id` varchar(36) NOT NULL DEFAULT '',
+  `name` varchar(128) NOT NULL,
+  `base_url` varchar(512) NOT NULL,
+  `driver` varchar(64) NOT NULL DEFAULT 'auto',
+  `driver_label` varchar(128) NOT NULL DEFAULT '',
+  `dry_run` tinyint NOT NULL DEFAULT 0,
+  `model` varchar(128) NOT NULL DEFAULT '',
+  `platform` varchar(64) NOT NULL DEFAULT '',
+  `available_drivers` json NOT NULL,
+  `status` varchar(16) NOT NULL DEFAULT 'offline',
+  `current_run_id` varchar(64) NOT NULL DEFAULT '',
+  `last_seen_at` varchar(40) NOT NULL DEFAULT '',
+  `note` text NOT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  KEY `IDX_bridges_team_id` (`team_id`),
+  KEY `IDX_bridges_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- Upgrade path: older installs may have `users` without `is_admin`

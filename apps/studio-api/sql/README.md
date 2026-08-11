@@ -15,7 +15,9 @@ docker compose -f deploy/mysql/docker-compose.yml up -d
 mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
 ```
 
-Tables: `users`, `teams`, `team_members`, `projects`, `work_orders`, `run_logs`, `run_log_entries`.
+Tables: `users`, `teams`, `team_members`, `projects`, `work_orders`, `run_logs`, `run_log_entries`, `digital_humans`, `pipelines`, `bridges`.
 
 Connection settings: `apps/studio-api/.env` (`STUDIO_MYSQL_*`).  
 Compose: [`deploy/mysql`](../../deploy/mysql/) · Skill [`skills/local-stack-setup/mysql.md`](../../../skills/local-stack-setup/mysql.md).
+
+On API boot, leftover YAML under `data/{agents,pipelines,bridges}` is imported once into MySQL (source files kept).

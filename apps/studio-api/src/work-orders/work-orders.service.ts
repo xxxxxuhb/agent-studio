@@ -27,6 +27,7 @@ import {
 } from "@agent-studio/agent-schema";
 import { PipelinesService } from "../pipelines/pipelines.service";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
+import { BridgesService } from "../bridges/bridges.service";
 import { bridgeHttpToken } from "../bridges/bridge-http";
 import { DifyClientService } from "../dify/dify-client.service";
 import { DifyConfigService } from "../dify/dify-config.service";
@@ -49,9 +50,12 @@ import {
   type BridgeStageHint,
   type ProjectRouting,
   isTransientDifyFailure,
-  studioReachableBridgeBase,
+  resolveStudioBridgeBase,
 } from "./work-order-dify-utils";
-import { prepareProjectRouting as prepareProjectRoutingFn } from "./work-order-routing";
+import {
+  ensureWorkspaceViaBridge,
+  prepareProjectRouting as prepareProjectRoutingFn,
+} from "./work-order-routing";
 
 export {
   isTransientDifyFailure,
@@ -124,6 +128,7 @@ export class WorkOrdersService implements OnModuleInit {
     private readonly runLogs: RunLogsService,
     private readonly realtime: RealtimeHub,
     private readonly studioConfig: StudioConfigService,
+    private readonly bridges: BridgesService,
   ) {}
 
   onModuleInit() {
@@ -684,11 +689,11 @@ export class WorkOrdersService implements OnModuleInit {
 
   /**
    * Restart fast-path: reuse last run's manager repo plan (no Bridge Cursor call).
-   * Still ensures clones exist. Returns null when there is nothing usable to reuse.
+   * Still ensures clones exist on the Bridge host. Returns null when nothing usable.
    */
   private async tryReusePreviousRouting(
     order: WorkOrder,
-    opts: { agentsMdPath?: string },
+    opts: { agentsMdPath?: string; bridgeBaseUrl?: string },
   ): Promise<ProjectRouting | null> {
     const prev = order.run;
     if (!prev) return null;
@@ -747,14 +752,51 @@ export class WorkOrdersService implements OnModuleInit {
     const project = await this.projects.getById(projectId);
     if (!project.enabled || !project.repos.length) return null;
 
-    const cloned = await this.projects.ensureCloned(null, projectId);
-    const ready = cloned.repos.filter((r) => r.clone_status === "ready");
-    if (!ready.length) return null;
+    const bridgeBase = resolveStudioBridgeBase({
+      override: opts.bridgeBaseUrl,
+      registeredBaseUrl: await this.bridges.pickRegisteredBaseUrl({
+        teamId: order.team_id,
+      }),
+      configured: this.difyConfig.get().bridge_base_url,
+    });
 
     const catalog = await this.projects.catalogForManager(null, projectId);
-    const selectable = catalog.repos.filter((r) =>
-      ready.some((x) => x.id === r.id),
-    );
+    let ensured;
+    try {
+      ensured = await ensureWorkspaceViaBridge(
+        { logger: this.logger },
+        {
+          bridgeBase,
+          projectId,
+          projectName: catalog.project_name,
+          repos: catalog.repos.map((r) => ({
+            id: r.id,
+            remote_url: r.remote_url,
+            name: r.name,
+            role: r.role,
+            default_branch: r.default_branch,
+            note: r.note,
+          })),
+        },
+      );
+    } catch {
+      return null;
+    }
+
+    const ready = ensured.filter((r) => r.clone_status === "ready");
+    if (!ready.length) return null;
+
+    const selectable = catalog.repos
+      .map((r) => {
+        const hit = ready.find((x) => x.id === r.id);
+        if (!hit) return null;
+        return {
+          ...r,
+          local_path: hit.local_path,
+          agents_md_path: hit.agents_md_path,
+        };
+      })
+      .filter((r): r is (typeof catalog.repos)[number] => Boolean(r));
 
     const orderedIds = (
       prevTargets.length ? prevTargets.map((t) => t.repo_id) : prevIds
@@ -798,8 +840,7 @@ export class WorkOrdersService implements OnModuleInit {
   }
 
   /**
-   * Clone project repos if missing, then ask Manager which repo(s) to change.
-   * May return multiple targets; Studio executes them sequentially.
+   * Ensure repos on Bridge, then ask Manager which repo(s) to change.
    */
   private async prepareProjectRouting(
     order: WorkOrder,
@@ -810,6 +851,9 @@ export class WorkOrdersService implements OnModuleInit {
         projects: this.projects,
         difyConfig: this.difyConfig,
         logger: this.logger,
+        registeredBridgeBaseUrl: await this.bridges.pickRegisteredBaseUrl({
+          teamId: order.team_id,
+        }),
       },
       order,
       opts,
@@ -824,7 +868,7 @@ export class WorkOrdersService implements OnModuleInit {
         "工单已有进行中的流水线。请先点「结束运行」，或对总管说「驳回结束」后再启动。",
       );
     }
-    const pipeline = this.pipelines.get(body.pipeline_id);
+    const pipeline = await this.pipelines.get(body.pipeline_id);
     if (!pipeline.enabled) {
       throw new BadRequestException(`流水线已停用: ${pipeline.id}`);
     }
@@ -837,6 +881,7 @@ export class WorkOrdersService implements OnModuleInit {
     if (body.reuse_previous_routing) {
       routing = await this.tryReusePreviousRouting(order, {
         agentsMdPath: body.agents_md_path,
+        bridgeBaseUrl: body.bridge_base_url,
       });
     }
     if (!routing) {
@@ -989,33 +1034,35 @@ export class WorkOrdersService implements OnModuleInit {
     },
   ): Promise<WorkOrder> {
     const cfg = this.difyConfig.get();
-    const pipeline = this.pipelines.get(draft.run!.pipeline_id);
+    const pipeline = await this.pipelines.get(draft.run!.pipeline_id);
     const auth = this.difyConfig.resolveAuthForPipeline(pipeline);
     const language = this.studioConfig.languageForTeam(
       draft.team_id || previous.team_id || "",
     );
     const user = `work-order:${draft.id}`;
 
-    const agentManifest = pipeline.steps.map((s) => {
-      let human = null;
-      try {
-        human = this.humans.get(s.agent);
-      } catch {
-        human = null;
-      }
-      return {
-        step_id: s.id,
-        label: s.label || s.id,
-        agent_id: s.agent,
-        agent_name: human?.name || s.agent,
-        role: human?.role || "",
-        human_approval: s.human_approval,
-        dify_agent_id: human?.dify?.agent_id || "",
-        dify_agent_name: human?.dify?.agent_name || "",
-        may_commit: Boolean(human?.permissions?.may_commit),
-        prompt_hints: human?.prompt_hints || [],
-      };
-    });
+    const agentManifest = await Promise.all(
+      pipeline.steps.map(async (s) => {
+        let human = null;
+        try {
+          human = await this.humans.get(s.agent);
+        } catch {
+          human = null;
+        }
+        return {
+          step_id: s.id,
+          label: s.label || s.id,
+          agent_id: s.agent,
+          agent_name: human?.name || s.agent,
+          role: human?.role || "",
+          human_approval: s.human_approval,
+          dify_agent_id: human?.dify?.agent_id || "",
+          dify_agent_name: human?.dify?.agent_name || "",
+          may_commit: Boolean(human?.permissions?.may_commit),
+          prompt_hints: human?.prompt_hints || [],
+        };
+      }),
+    );
 
     const agentsMd =
       opts.agents_md_path ||
@@ -1251,12 +1298,12 @@ export class WorkOrdersService implements OnModuleInit {
     );
   }
 
-  private authForOrder(order: WorkOrder) {
+  private async authForOrder(order: WorkOrder) {
     const pipelineId = order.run?.pipeline_id || order.pipeline_id;
     let pipeline = null;
     if (pipelineId) {
       try {
-        pipeline = this.pipelines.get(pipelineId);
+        pipeline = await this.pipelines.get(pipelineId);
       } catch {
         pipeline = null;
       }
@@ -1275,7 +1322,7 @@ export class WorkOrdersService implements OnModuleInit {
       throw new BadRequestException("该工单没有绑定 Dify run");
     }
 
-    const auth = this.authForOrder(order);
+    const auth = await this.authForOrder(order);
     let detail;
     try {
       detail = await this.difyClient.getRun(workflowRunId, auth);
@@ -1653,7 +1700,7 @@ export class WorkOrdersService implements OnModuleInit {
       action,
       user: dify.user,
       inputs,
-      auth: this.authForOrder(order),
+      auth: await this.authForOrder(order),
     });
 
     order = await this.get(id);
@@ -1758,7 +1805,7 @@ export class WorkOrdersService implements OnModuleInit {
     try {
       const form = await this.difyClient.getHumanInputForm(
         dify.form_token,
-        this.authForOrder(order),
+        await this.authForOrder(order),
       );
       dify.form_content = form.form_content;
       dify.form_actions = (form.user_actions || []).map((a) => ({
@@ -2011,7 +2058,7 @@ export class WorkOrdersService implements OnModuleInit {
     const dify = order.run.dify;
     let difyStopDetail = "";
     if (dify) {
-      const auth = this.authForOrder(order);
+      const auth = await this.authForOrder(order);
       const user = (dify.user || "").trim() || `wo-${order.id}`;
       const stop = await this.difyClient.stopWorkflow({
         taskId: dify.task_id,
@@ -2083,7 +2130,7 @@ export class WorkOrdersService implements OnModuleInit {
    * Manager-ordered target (or complete the work order).
    */
   private async finishCurrentRepoAndContinue(order: WorkOrder): Promise<WorkOrder> {
-    const prepared = this.markCurrentRepoCompleted(order);
+    const prepared = await this.markCurrentRepoCompleted(order);
     if (prepared.done) return await this.write(prepared.order);
 
     const saved = await this.write(prepared.order);
@@ -2094,10 +2141,10 @@ export class WorkOrdersService implements OnModuleInit {
     });
   }
 
-  private markCurrentRepoCompleted(order: WorkOrder): {
+  private async markCurrentRepoCompleted(order: WorkOrder): Promise<{
     order: WorkOrder;
     done: boolean;
-  } {
+  }> {
     const run = order.run!;
     const targets = run.repo_targets || [];
     const stamp = this.nowIso();
@@ -2151,19 +2198,21 @@ export class WorkOrdersService implements OnModuleInit {
 
     let pipelineSteps = run.steps;
     try {
-      pipelineSteps = this.pipelines.get(run.pipeline_id).steps.map((s) => ({
-        step_id: s.id,
-        agent: s.agent,
-        label: s.label || s.id,
-        human_approval: s.human_approval,
-        on_reject: s.on_reject,
-        reject_goto: s.reject_goto,
-        status: "pending" as const,
-        summary: "",
-        output: "",
-        output_title: "",
-        feedback: "",
-      }));
+      pipelineSteps = (await this.pipelines.get(run.pipeline_id)).steps.map(
+        (s) => ({
+          step_id: s.id,
+          agent: s.agent,
+          label: s.label || s.id,
+          human_approval: s.human_approval,
+          on_reject: s.on_reject,
+          reject_goto: s.reject_goto,
+          status: "pending" as const,
+          summary: "",
+          output: "",
+          output_title: "",
+          feedback: "",
+        }),
+      );
     } catch {
       pipelineSteps = run.steps.map((s) => ({
         ...s,

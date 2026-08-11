@@ -146,4 +146,4 @@ npx @agent-studio/bridge start --driver cursor \
 | `BRIDGE_GIT_SSH_PORT` | — | 非 22 时写成 `ssh://git@host:PORT/…`（本地 GitLab 常为 `2224`） |
 | `BRIDGE_GIT_PREFER_SSH` | — | 强制 HTTP remote → SSH |
 | `GITLAB_TOKEN` | — | 开 MR 用的 bot PAT（建议非 root） |
-| `STUDIO_GIT_SSH_*` | — | Studio `ensureCloned` 与 Bridge 共用同一套 SSH 配置 |
+| `STUDIO_GIT_SSH_*` | — | 可选：Studio UI `ensureCloned` 调试克隆；工单工作区由 Bridge `BRIDGE_GIT_*` / `BRIDGE_REPOS_DIR` 负责 |

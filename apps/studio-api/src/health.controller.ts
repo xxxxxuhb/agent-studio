@@ -10,12 +10,13 @@ export class HealthController {
 
   @Public()
   @Get()
-  health() {
+  async health() {
+    const items = await this.humans.list();
     return {
       ok: true,
       service: "studio-api",
-      dataDir: this.humans.getDataDir(),
-      count: this.humans.list().length,
+      storage: "mysql",
+      digital_humans: items.length,
     };
   }
 }

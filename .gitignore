@@ -11,3 +11,4 @@ apps/*/data/
 packages/*/node_modules/
 packages/*/dist/
 .bridge-data/
+packages/bridge/.tmp-ws-*/

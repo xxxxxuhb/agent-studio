@@ -6,16 +6,16 @@
 
 ### Cloud Bridge（remote executor host）
 
-- [ ] Bridge 跑在云 VM / 容器，`BRIDGE_PUBLIC_URL` 对 Studio + Dify 可达；Bridge WS 回连 Studio。
-- [ ] 仓库工作区归 Bridge 主机（今日 Studio `ensureCloned` 与 Cursor `local.cwd` 都假定同机 `~/AgentStudio/{project.id}/{repo.id}`，分机即断）。
-- [ ] Ops：云 `.env`（`CURSOR_API_KEY` / git SSH bot / `GITLAB_TOKEN` / `STUDIO_BRIDGE_TOKEN`）；文档写清局域网 vs 公网 URL + TLS 反代。
+- [x] Bridge 跑在云 VM / 容器，`BRIDGE_PUBLIC_URL` 对 Studio + Dify 可达；Bridge WS 回连 Studio。
+- [x] 仓库工作区归 Bridge 主机（`POST /workspace/ensure` + `BRIDGE_REPOS_DIR`；工单 routing 不再依赖 Studio 本机 `ensureCloned` 路径）。
+- [x] Ops：云 `.env`（`CURSOR_API_KEY` / git SSH bot / `GITLAB_TOKEN` / `STUDIO_BRIDGE_TOKEN`）；文档写清局域网 vs 公网 URL + TLS 反代（见 `docs/环境配置指南.md` §3.4）。
 
 Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远程执行机，不是把 Cursor 嵌进云端 Dify Agent。
 
 ### 存储收尾（YAML → MySQL）
 
-- [ ] 流水线 / 数字人 / Bridge 登记迁 MySQL（今日项目与工单已在库，其余多在 `data/*.yaml`）。
-- [ ] 多实例 / 备份策略与 YAML 双轨脱钩。
+- [x] 流水线 / 数字人 / Bridge 登记迁 MySQL（一次性 YAML 导入，源文件保留）。
+- [ ] 多实例 / 备份策略与 YAML 双轨脱钩（清理残留 `data/{pipelines,agents,bridges}` 写入路径与运维备份说明）。
 
 ### 密钥与租户边界
 
@@ -71,6 +71,17 @@ Notes (2026-08-10): UI `dify.agent_id` / `agent_name` 仍是元数据；工单�
 ---
 
 ## Done
+
+### Pipelines / humans / bridges → MySQL (2026-08-11)
+
+- [x] 表 `digital_humans` / `pipelines` / `bridges`；服务改 TypeORM；bootstrap 一次性 YAML 导入。
+- [x] Studio 运行时不再读写这三类 YAML（源文件保留供回滚）。
+
+### Cloud Bridge workspace ownership (2026-08-11)
+
+- [x] Bridge `POST /workspace/ensure` + `BRIDGE_REPOS_DIR`；工单 routing / restart reuse 用 Bridge 路径。
+- [x] Studio 优先注册执行器 `base_url`；`host.docker.internal` 仅本机共址改写。
+- [x] 文档：`docs/环境配置指南.md` §3.4 + skill Remote Bridge。
 
 ### Auth / teams / multi-tenancy
 

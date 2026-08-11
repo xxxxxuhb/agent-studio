@@ -42,15 +42,13 @@ export class BridgesGateway
   handleDisconnect(client: Socket) {
     const id = (client.data as BridgeSocketData).bridgeId;
     if (!id) return;
-    const offline = this.bridges.markOffline(id);
-    this.logger.log(`bridge disconnected → offline: ${id}`);
-    if (offline) {
-      // already broadcast via service
-    }
+    void this.bridges.markOffline(id).then(() => {
+      this.logger.log(`bridge disconnected → offline: ${id}`);
+    });
   }
 
   @SubscribeMessage("bridge_register")
-  register(
+  async register(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     body: {
@@ -67,7 +65,7 @@ export class BridgesGateway
     },
   ) {
     try {
-      const bridge = this.bridges.connectFromWs({
+      const bridge = await this.bridges.connectFromWs({
         token: body?.token || "",
         name: body?.name || "unnamed",
         base_url: body?.base_url || "",
@@ -81,7 +79,9 @@ export class BridgesGateway
       });
       (client.data as BridgeSocketData).bridgeId = bridge.id;
       client.join(`bridge:${bridge.id}`);
-      this.logger.log(`bridge registered via WS: ${bridge.id} (${bridge.driver})`);
+      this.logger.log(
+        `bridge registered via WS: ${bridge.id} (${bridge.driver})`,
+      );
       return { ok: true, bridge };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -90,7 +90,7 @@ export class BridgesGateway
   }
 
   @SubscribeMessage("bridge_status")
-  status(
+  async status(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     body: {
@@ -106,7 +106,7 @@ export class BridgesGateway
     const id = (client.data as BridgeSocketData).bridgeId;
     if (!id) return { ok: false, error: "not registered" };
     try {
-      const bridge = this.bridges.setStatus(id, {
+      const bridge = await this.bridges.setStatus(id, {
         status: body?.status || "online",
         current_run_id: body?.current_run_id,
         driver: body?.driver,
@@ -125,12 +125,12 @@ export class BridgesGateway
   }
 
   @SubscribeMessage("bridge_ping")
-  ping(@ConnectedSocket() client: Socket) {
+  async ping(@ConnectedSocket() client: Socket) {
     const id = (client.data as BridgeSocketData).bridgeId;
     if (!id) return { ok: false };
     try {
-      const current = this.bridges.get(id);
-      const bridge = this.bridges.setStatus(id, {
+      const current = await this.bridges.get(id);
+      const bridge = await this.bridges.setStatus(id, {
         status: current.status === "busy" ? "busy" : "online",
         current_run_id: current.current_run_id,
       });

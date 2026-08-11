@@ -277,7 +277,7 @@ export class ManagerChatService implements OnModuleInit {
       raw.match(/^启动流水线\s+dify\s+([a-z0-9_-]+)$/i);
     if (startDify?.[1]) {
       try {
-        this.pipelines.get(startDify[1]);
+        await this.pipelines.get(startDify[1]);
         const order = await this.workOrders.start(workOrderId, {
           pipeline_id: startDify[1],
           executor: "dify",
@@ -288,8 +288,7 @@ export class ManagerChatService implements OnModuleInit {
           workOrder: order,
         };
       } catch (err) {
-        const pipes = this.pipelines
-          .list({ enabled: "true" })
+        const pipes = (await this.pipelines.list({ enabled: "true" }))
           .map((p) => `- ${p.id}：${p.name}`)
           .join("\n");
         return {
@@ -304,7 +303,7 @@ export class ManagerChatService implements OnModuleInit {
       raw.match(/^启动流水线\s+([a-z0-9_-]+)$/i);
     if (start?.[1]) {
       try {
-        this.pipelines.get(start[1]);
+        await this.pipelines.get(start[1]);
         const order = await this.workOrders.start(workOrderId, {
           pipeline_id: start[1],
           executor: "dify",
@@ -315,8 +314,7 @@ export class ManagerChatService implements OnModuleInit {
           workOrder: order,
         };
       } catch (err) {
-        const pipes = this.pipelines
-          .list({ enabled: "true" })
+        const pipes = (await this.pipelines.list({ enabled: "true" }))
           .map((p) => `- ${p.id}：${p.name}`)
           .join("\n");
         return {

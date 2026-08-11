@@ -64,7 +64,7 @@ export class PipelinesController {
   async difyDsl(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     const pipeline = await this.pipelines.getForUser(user.id, id);
     const agents = new Map(
-      this.humans.list({ enabled: "all" }).map((h) => [h.id, h]),
+      (await this.humans.list({ enabled: "all" })).map((h) => [h.id, h]),
     );
     const yaml = generateDifyWorkflowDsl({ pipeline, agents });
     return {
@@ -83,7 +83,7 @@ export class PipelinesController {
   ) {
     const pipeline = await this.pipelines.getForUser(user.id, id);
     const agents = new Map(
-      this.humans.list({ enabled: "all" }).map((h) => [h.id, h]),
+      (await this.humans.list({ enabled: "all" })).map((h) => [h.id, h]),
     );
     const yaml = generateDifyWorkflowDsl({ pipeline, agents });
     const overwrite = Boolean(body?.overwrite);
