@@ -123,6 +123,7 @@ APP_MAX_EXECUTION_TIME=7200
 - `SECRET_KEY` 为空 → 登录后协作 WS /「同步数据」401  
 - 改完重建相关服务，并清掉浏览器 localhost 站点数据后重登  
 - SSRF 不放行 → HTTP 节点访问 Bridge 被拦  
+- **注意**：若错误文案是 `blocked by SSRF protection` 且 URL 为 `host.docker.internal:8787/runs`，优先查 Bridge **HTTP token**（常被误报）；见 [问题记录.md](./问题记录.md)
 
 `docker-compose.override.yml` 已为容器加上 `host.docker.internal:host-gateway`。
 

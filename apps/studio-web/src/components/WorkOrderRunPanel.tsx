@@ -135,7 +135,10 @@ export function WorkOrderRunPanel({
   const autoApprove = Boolean(run.auto_approve);
   const humanGates = run.steps.filter((s) => s.human_approval).length;
 
-  const difyAlert = run.dify ? describeDifyAlert(order, run.dify) : null;
+  const difyAlert =
+    run.executor !== "studio" && run.dify
+      ? describeDifyAlert(order, run.dify)
+      : null;
   const events = run.events || [];
   const queueNote =
     order.status === "queued"
@@ -144,6 +147,7 @@ export function WorkOrderRunPanel({
       : "";
   const dryRun =
     Boolean(run.dify?.bridge_dry_run) ||
+    Boolean(run.studio?.dry_run) ||
     events.some((e) => e.dry_run) ||
     run.steps.some((s) => /\[dry-run\]|CURSOR_API_KEY missing/i.test(s.output || ""));
 
@@ -257,6 +261,27 @@ export function WorkOrderRunPanel({
                 </Typography.Text>
                 <Link
                   to={`/logs?q=${encodeURIComponent(run.dify.workflow_run_id)}`}
+                >
+                  <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
+                    检索
+                  </Button>
+                </Link>
+              </>
+            ) : null}
+            {run.studio?.bridge_run_id ? (
+              <>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Bridge
+                </Typography.Text>
+                <Typography.Text
+                  code
+                  copyable={{ text: run.studio.bridge_run_id }}
+                  style={{ fontSize: 12 }}
+                >
+                  {run.studio.bridge_run_id}
+                </Typography.Text>
+                <Link
+                  to={`/logs?q=${encodeURIComponent(run.studio.bridge_run_id)}`}
                 >
                   <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
                     检索
@@ -642,10 +667,14 @@ function ApprovalCard({
 }) {
   const run = order.run!;
   const dify = run.dify;
+  const studio = run.studio;
+  const isStudio = run.executor === "studio";
+  const canDecide = isStudio || Boolean(dify?.form_token);
   const autoApprove = Boolean(run.auto_approve);
   const oqSources = [
     dify?.form_content,
     currentStep.output,
+    studio?.last_summary,
     ...run.steps.map((s) => s.output),
   ];
   const showChecklist = hasOpenQuestions(oqSources);
@@ -657,7 +686,11 @@ function ApprovalCard({
       title={
         <Space wrap>
           <span>
-            {dify?.form_node_title || "Dify 人工确认"}
+            {isStudio
+              ? studio?.current_stage
+                ? `人工确认 · ${studio.current_stage}`
+                : "Studio 人工确认"
+              : dify?.form_node_title || "Dify 人工确认"}
           </span>
           <Tag color={autoApprove ? "success" : "warning"}>
             自动确认：{autoApprove ? "已开启" : "未开启"}
@@ -672,7 +705,11 @@ function ApprovalCard({
           showIcon
           style={{ marginBottom: 12 }}
           message="本轮已开自动确认"
-          description="通常无需手动操作；若未自动通过，可在下方手动提交，或点「同步 Dify」。"
+          description={
+            isStudio
+              ? "通常无需手动操作；若未自动通过，可在下方手动提交。"
+              : "通常无需手动操作；若未自动通过，可在下方手动提交，或点「同步 Dify」。"
+          }
         />
       ) : null}
 
@@ -692,13 +729,26 @@ function ApprovalCard({
         <MarkdownBody content={dify.form_content} />
       ) : null}
 
+      {isStudio && studio?.last_summary && !showChecklist ? (
+        <MarkdownBody content={studio.last_summary} />
+      ) : null}
+
       {!showChecklist ? (
         <Typography.Paragraph>
           当前步骤：{currentStep.label || currentStep.step_id}（{currentStep.agent}）
+          {studio?.bridge_run_id ? (
+            <>
+              {" "}
+              · Bridge run{" "}
+              <Typography.Text code copyable={{ text: studio.bridge_run_id }}>
+                {studio.bridge_run_id}
+              </Typography.Text>
+            </>
+          ) : null}
         </Typography.Paragraph>
       ) : null}
 
-      {!dify?.form_token ? (
+      {!isStudio && !dify?.form_token ? (
         <Alert
           type={
             /失败|过期|Web App/i.test(dify?.raw_summary || "")
@@ -720,14 +770,18 @@ function ApprovalCard({
         <>
           <Input.TextArea
             rows={2}
-            placeholder="可选反馈（会写入 Dify 表单对应字段）"
+            placeholder={
+              isStudio
+                ? "可选反馈（写入 Bridge decision）"
+                : "可选反馈（会写入 Dify 表单对应字段）"
+            }
             value={feedback}
             onChange={(e) => onFeedbackChange(e.target.value)}
             style={{ marginBottom: 12 }}
           />
 
           <Space wrap>
-            {dify?.form_actions?.length ? (
+            {!isStudio && dify?.form_actions?.length ? (
               dify.form_actions.map((a) => {
                 const rejectish = /reject|驳回|拒绝/i.test(a.id + (a.title || ""));
                 return (
@@ -740,7 +794,7 @@ function ApprovalCard({
                         : "default"
                     }
                     danger={rejectish}
-                    disabled={!dify.form_token}
+                    disabled={!canDecide}
                     onClick={() =>
                       onDecide(rejectish ? "reject" : "approve", a.id)
                     }
@@ -754,7 +808,7 @@ function ApprovalCard({
                 <Button
                   type="primary"
                   icon={<CheckOutlined />}
-                  disabled={!dify?.form_token}
+                  disabled={!canDecide}
                   onClick={() => onDecide("approve")}
                 >
                   通过并继续
@@ -762,7 +816,7 @@ function ApprovalCard({
                 <Button
                   danger
                   icon={<CloseOutlined />}
-                  disabled={!dify?.form_token}
+                  disabled={!canDecide}
                   onClick={() => onDecide("reject")}
                 >
                   驳回
@@ -771,7 +825,7 @@ function ApprovalCard({
             )}
           </Space>
         </>
-      ) : dify?.form_actions?.length ? (
+      ) : !isStudio && dify?.form_actions?.length ? (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
           也可使用 Dify 原始按钮：
           <Space wrap style={{ marginLeft: 8 }}>
@@ -782,7 +836,7 @@ function ApprovalCard({
                   key={a.id}
                   size="small"
                   danger={rejectish}
-                  disabled={!dify.form_token}
+                  disabled={!canDecide}
                   onClick={() =>
                     onDecide(rejectish ? "reject" : "approve", a.id)
                   }

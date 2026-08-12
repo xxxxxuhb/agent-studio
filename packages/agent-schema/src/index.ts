@@ -219,7 +219,14 @@ export type WorkOrderGit = z.infer<typeof WorkOrderGitSchema>;
 
 /** Append-only timeline for a work-order run (control-plane audit). */
 export const WorkOrderRunEventSchema = z.object({
-  id: z.string(),
+  // Older rows / recovery scripts may omit id — synthesize so list/get don't 500.
+  id: z.preprocess(
+    (v) =>
+      typeof v === "string" && v.trim()
+        ? v.trim()
+        : `ev-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    z.string().min(1),
+  ),
   at: z.string(),
   type: z.enum([
     "run_started",
@@ -270,9 +277,12 @@ export const WorkOrderRunSchema = z.object({
   pipeline_id: z.string(),
   pipeline_name: z.string(),
   executor: z.preprocess(
-    (v) => (v === "local" || v == null || v === "" ? "dify" : v),
-    z.literal("dify"),
-  ).default("dify"),
+    (v) => {
+      if (v === "local" || v == null || v === "") return "studio";
+      return v;
+    },
+    z.enum(["dify", "studio"]),
+  ).default("studio"),
   /**
    * When true, Studio auto-submits approve at human gates.
    * Pipeline `human_approval` steps stay defined — this only replaces manual click.
@@ -297,6 +307,20 @@ export const WorkOrderRunSchema = z.object({
   repo_targets: z.array(WorkOrderRepoTargetSchema).optional().default([]),
   /** Index into repo_targets currently being modified. */
   current_repo_index: z.number().int().nonnegative().optional().default(0),
+  /** Studio self-managed orchestrator state (executor=studio). */
+  studio: z
+    .object({
+      bridge_run_id: z.string().optional().default(""),
+      bridge_base_url: z.string().optional().default(""),
+      current_stage: z.string().optional().default(""),
+      last_summary: z.string().optional().default(""),
+      pending_human: z.boolean().optional().default(false),
+      dry_run: z.boolean().optional().default(false),
+      status: z.string().optional().default(""),
+      error: z.string().nullable().optional(),
+      last_synced_at: z.string().optional(),
+    })
+    .optional(),
   dify: z
     .object({
       workflow_run_id: z.string().optional(),
@@ -356,6 +380,7 @@ export const WorkOrderRunSchema = z.object({
       agents_md_path: z.string().optional(),
       bridge_base_url: z.string().optional(),
       reuse_previous_routing: z.boolean().optional().default(false),
+      executor: z.enum(["dify", "studio"]).optional().default("studio"),
       enqueued_at: z.string(),
       note: z.string().optional().default(""),
     })
@@ -415,11 +440,14 @@ export type WorkOrderUpdate = z.infer<typeof WorkOrderUpdateSchema>;
 
 export const WorkOrderStartSchema = z.object({
   pipeline_id: z.string().min(1),
-  /** Always Dify Workflow; legacy "local" is coerced to dify. */
+  /** studio = self-managed orchestrator; dify = legacy Workflow. Legacy "local" → studio. */
   executor: z.preprocess(
-    (v) => (v === "local" || v == null || v === "" ? "dify" : v),
-    z.literal("dify"),
-  ).optional().default("dify"),
+    (v) => {
+      if (v === "local" || v == null || v === "") return "studio";
+      return v;
+    },
+    z.enum(["dify", "studio"]),
+  ).optional().default("studio"),
   /** Auto-approve human gates for this run (does not change pipeline definition). */
   auto_approve: z.boolean().optional().default(false),
   agents_md_path: z.string().optional(),
@@ -436,8 +464,11 @@ export type WorkOrderStart = z.infer<typeof WorkOrderStartSchema>;
 export const WorkOrderRestartSchema = z.object({
   pipeline_id: z.string().optional(),
   executor: z.preprocess(
-    (v) => (v === "local" || v == null || v === "" ? "dify" : v),
-    z.literal("dify"),
+    (v) => {
+      if (v === "local" || v == null || v === "") return "studio";
+      return v;
+    },
+    z.enum(["dify", "studio"]),
   ).optional(),
   auto_approve: z.boolean().optional(),
   agents_md_path: z.string().optional(),

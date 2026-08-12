@@ -11,9 +11,10 @@
     "start": "node dist/main.js",
     "seed": "tsc -p tsconfig.json && node dist/seed-cli.js"
   },
-  "dependencies": {
-    "@agent-studio/agent-schema": "0.1.0",
-    "@nestjs/common": "^11.0.12",
+    "dependencies": {
+      "@agent-studio/agent-schema": "0.1.0",
+      "@agent-studio/orchestrator": "0.1.0",
+      "@nestjs/common": "^11.0.12",
     "@nestjs/core": "^11.0.12",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/platform-express": "^11.0.12",

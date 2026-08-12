@@ -112,7 +112,7 @@ export class RunLogsService {
 
   private async saveMeta(meta: RunLogMeta): Promise<RunLogMeta> {
     const next = RunLogMetaSchema.parse(meta);
-    await this.metas.save({
+    const row = {
       run_id: next.run_id,
       work_order_id: next.work_order_id,
       team_id: next.team_id || "",
@@ -130,6 +130,12 @@ export class RunLogsService {
       updated_at: next.updated_at,
       entry_count: next.entry_count || 0,
       sources: next.sources || [],
+    };
+    // Upsert: concurrent ensureRun/log used to race on INSERT and crash the API
+    // (ER_DUP_ENTRY on run_logs.PRIMARY).
+    await this.metas.upsert(row, {
+      conflictPaths: ["run_id"],
+      skipUpdateIfNoValuesChanged: true,
     });
     return next;
   }

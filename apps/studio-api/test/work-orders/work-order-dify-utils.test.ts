@@ -53,6 +53,12 @@ describe("human form / form_token helpers", () => {
     assert.equal(isTransientDifyFailure("HTTP 503"), true);
     assert.equal(isTransientDifyFailure("fetch failed"), true);
     assert.equal(isTransientDifyFailure("validation error"), false);
+    assert.equal(
+      isTransientDifyFailure(
+        "Access to 'http://host.docker.internal:8787/runs' was blocked by SSRF protection.",
+      ),
+      true,
+    );
   });
 
   it("rewrites loopback for Dify-facing Bridge URL", () => {

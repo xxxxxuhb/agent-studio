@@ -88,6 +88,8 @@ export function resolveDifyBridgeBase(opts: {
 export function isTransientDifyFailure(message: string): boolean {
   const m = (message || "").toLowerCase();
   if (!m) return false;
+  // Dify mislabels Bridge HTTP 401 (via Squid) as SSRF — not a flaky network blip.
+  if (m.includes("blocked by ssrf protection")) return true;
   if (/\b(502|503|504|429)\b/.test(m)) return true;
   if (
     m.includes("status code 502") ||
@@ -108,6 +110,34 @@ export function isTransientDifyFailure(message: string): boolean {
     m.includes("aborted") ||
     m.includes("timeout")
   );
+}
+
+/**
+ * Human-readable rewrite for Dify errors that hit Bridge through Squid.
+ * Dify treats any 401/403 with Via:squid as "SSRF protection".
+ */
+export function explainDifyBridgeError(message: string): string {
+  const m = (message || "").trim();
+  if (!m) return m;
+  if (/blocked by ssrf protection/i.test(m) && /8787|host\.docker\.internal|\/runs/i.test(m)) {
+    return (
+      `${m}\n\n` +
+      "说明：这通常不是真 SSRF。Dify 经 Squid 访问 Bridge 时，若 Bridge 返回鉴权失败，" +
+      "会被误报成 SSRF。请确认 Studio API 与 Bridge 的 BRIDGE_HTTP_TOKEN / STUDIO_BRIDGE_TOKEN 一致，" +
+      "且流水线 HTTP 节点带有 Authorization: Bearer {{bridge_token}}；改完后重新执行。"
+    );
+  }
+  // Bridge auth failures are 400 (not 401) so Dify/Squid won't mislabel them as SSRF.
+  if (/status code 400/i.test(m) || /\bunauthorized\b/i.test(m)) {
+    return (
+      `${m}\n\n` +
+      "说明：多为 Bridge HTTP 鉴权失败（未带上 Bearer / X-Bridge-Token）。" +
+      "常见原因：① 实际跑的是团队/全局 App Key 对应的旧 Dify App（HTTP 节点仍是 no-auth），" +
+      "而「导入 DSL」只更新了流水线记录的另一个 app_id；② DSL 未发布。" +
+      "处理：给本流水线启用 Dify 绑定并填写「直接对应已导入 App」的 Workflow App API Key，或把团队/全局 Key 换成该 App 的 Key，再重新执行。"
+    );
+  }
+  return m;
 }
 
 /** Dify run statuses that mean Human Input / form is no longer needed. */

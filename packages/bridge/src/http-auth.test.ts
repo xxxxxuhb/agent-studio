@@ -96,7 +96,7 @@ describe("bridge HTTP auth", () => {
         method: "GET",
         url: "/runs",
       });
-      assert.equal(denied.statusCode, 401);
+      assert.equal(denied.statusCode, 400);
       assert.equal((denied.json() as { error?: string }).error, "unauthorized");
 
       const ok = await app.inject({
@@ -119,7 +119,7 @@ describe("bridge HTTP auth", () => {
         url: "/runs",
         headers: { authorization: "Bearer wrong" },
       });
-      assert.equal(wrong.statusCode, 401);
+      assert.equal(wrong.statusCode, 400);
 
       const ok = await app.inject({
         method: "GET",
@@ -156,7 +156,7 @@ describe("bridge HTTP auth aliases and disabled mode", () => {
     await app.ready();
     try {
       const denied = await app.inject({ method: "GET", url: "/runs" });
-      assert.equal(denied.statusCode, 401);
+      assert.equal(denied.statusCode, 400);
 
       const ok = await app.inject({
         method: "GET",

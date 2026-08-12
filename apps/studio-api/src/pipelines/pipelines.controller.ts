@@ -117,6 +117,15 @@ export class PipelinesController {
       });
     }
 
+    const bindingEnabled = Boolean(pipeline.dify?.enabled);
+    const hint = !appId
+      ? "DSL 已提交导入，但未返回 app_id；请到 Dify 工作室确认应用是否创建成功。"
+      : !published?.ok
+        ? "DSL 已导入，但发布结果未知；请到 Dify 工作室确认已发布。"
+        : bindingEnabled
+          ? "DSL 已导入并发布。运行将使用本流水线绑定的 App API Key。"
+          : "DSL 已导入并发布到上述 app_id，但本流水线未启用 Dify 绑定：实际运行仍走团队/全局 App Key（可能是另一个旧 App）。请启用绑定并填写该 App 的 Workflow API Key，否则改鉴权不会生效。";
+
     return {
       ok: true,
       status: imported.status,
@@ -125,11 +134,8 @@ export class PipelinesController {
       published: Boolean(published?.ok),
       published_version: published?.version || "",
       pipeline: pipelinePublic,
-      hint: appId
-        ? published?.ok
-          ? "DSL 已导入并发布。请确认本流水线已绑定该 App 的 API Key 并启用。"
-          : "DSL 已导入，但发布结果未知；请到 Dify 工作室确认已发布。"
-        : "DSL 已提交导入，但未返回 app_id；请到 Dify 工作室确认应用是否创建成功。",
+      binding_enabled: bindingEnabled,
+      hint,
     };
   }
 

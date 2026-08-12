@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import YAML from "yaml";
 import type { DigitalHuman, Pipeline } from "@agent-studio/agent-schema";
+import { bridgeStageForAgent as mapBridgeStage } from "@agent-studio/orchestrator";
 
 type GraphEdge = Record<string, unknown>;
 type GraphNode = Record<string, unknown>;
@@ -12,39 +13,7 @@ const EDGE_META = {
 
 /** Map Studio agent → Bridge `/runs/:id/:stage` path segment. */
 export function bridgeStageForAgent(agent: DigitalHuman | null, agentId: string): string {
-  const fromDify = agent?.dify?.agent_id?.trim();
-  if (fromDify) return fromDify;
-
-  const known: Record<string, string> = {
-    requirement_intake: "requirement",
-    requirement_clarify: "requirement",
-    requirement: "requirement",
-    plan: "plan",
-    fullstack_dev: "dev",
-    code_review: "review",
-    test: "test",
-    ops: "release_test",
-  };
-  if (known[agentId]) return known[agentId];
-
-  switch (agent?.role) {
-    case "intake":
-    case "clarify":
-    case "spec":
-      return "requirement";
-    case "plan":
-      return "plan";
-    case "implement":
-      return "dev";
-    case "review":
-      return "review";
-    case "verify":
-      return "test";
-    case "ops":
-      return "release_test";
-    default:
-      return agentId;
-  }
+  return mapBridgeStage(agent, agentId);
 }
 
 function edge(
@@ -83,9 +52,17 @@ function httpNode(opts: {
       title: opts.title,
       method: "POST",
       url: opts.url,
-      authorization: { type: "no-auth" },
+      // Prefer Dify Bearer auth slot so {{bridge_token}} is substituted reliably.
+      // Also send X-Bridge-Token (Bridge accepts either) in case Authorization is dropped.
+      authorization: {
+        type: "api-key",
+        config: {
+          type: "bearer",
+          api_key: "{{#start.bridge_token#}}",
+        },
+      },
       headers:
-        "Content-Type:application/json\nAuthorization:Bearer {{#start.bridge_token#}}",
+        "Content-Type:application/json\nX-Bridge-Token:{{#start.bridge_token#}}",
       params: "",
       body: {
         type: "json",

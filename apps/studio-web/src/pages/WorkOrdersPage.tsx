@@ -129,6 +129,7 @@ export function WorkOrdersPage() {
   /** Auto-pull Dify pause / form_token while waiting for Human Input. */
   useEffect(() => {
     if (!selected) return;
+    if (selected.run?.executor === "studio") return;
     const dify = selected.run?.dify;
     const waiting =
       (selected.status === "pending_approval" || dify?.status === "paused") &&
@@ -245,14 +246,14 @@ export function WorkOrdersPage() {
     try {
       const updated = await workOrdersApi.start(selected.id, {
         pipeline_id: pipelineId,
-        executor: "dify",
+        executor: "studio",
         auto_approve: autoApprove,
       });
       setStartOpen(false);
       message.success(
         autoApprove
-          ? "已提交 Dify 执行（自动确认已开）"
-          : "已提交 Dify 执行",
+          ? "已提交 Studio 编排（自动确认已开）"
+          : "已提交 Studio 编排（Bridge）",
       );
       await reload(updated.id);
     } catch (err) {
@@ -314,8 +315,8 @@ export function WorkOrdersPage() {
       setRestartOpen(false);
       message.success(
         autoApprove
-          ? "已重新提交 Dify 执行（自动确认已开）"
-          : "已重新提交 Dify 执行",
+          ? "已重新提交执行（自动确认已开，后台跑阶段）"
+          : "已重新提交执行（后台跑阶段）",
       );
       await reload(updated.id);
     } catch (err) {
@@ -778,7 +779,9 @@ export function WorkOrdersPage() {
       >
         <Typography.Paragraph type="secondary">
           将结束当前运行（如有），并用上次配置再启：流水线{" "}
-          {selected?.run?.pipeline_id || "-"}（Dify）。默认复用上次总管选仓（不再重新选仓）。
+          {selected?.run?.pipeline_id || "-"}
+          {selected?.run?.executor === "dify" ? "（Dify）" : "（Studio 编排）"}
+          。默认复用上次总管选仓（不再重新选仓）。确认后立即返回，阶段在后台执行。
         </Typography.Paragraph>
         <Form layout="vertical">
           <Form.Item

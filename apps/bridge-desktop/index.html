@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Studio Bridge</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>Bridge</h1>
+        <p class="tagline">本机启停小窗 · 密钥仍在 Bridge <code>.env</code></p>
+      </header>
+
+      <section class="status-card" aria-live="polite">
+        <div class="status-row">
+          <span class="label">状态</span>
+          <span id="status-badge" class="badge stopped">stopped</span>
+        </div>
+        <dl class="meta">
+          <div>
+            <dt>进程</dt>
+            <dd id="meta-process">—</dd>
+          </div>
+          <div>
+            <dt>Driver</dt>
+            <dd id="meta-driver">—</dd>
+          </div>
+          <div>
+            <dt>Name</dt>
+            <dd id="meta-name">—</dd>
+          </div>
+          <div class="full">
+            <dt>Health</dt>
+            <dd id="meta-health-url" class="mono">—</dd>
+          </div>
+          <div class="full">
+            <dt>CWD</dt>
+            <dd id="meta-cwd" class="mono">—</dd>
+          </div>
+          <div class="full">
+            <dt>详情</dt>
+            <dd id="meta-detail">—</dd>
+          </div>
+        </dl>
+      </section>
+
+      <div class="actions">
+        <button type="button" id="btn-start" class="primary">启动</button>
+        <button type="button" id="btn-stop">停止</button>
+        <button type="button" id="btn-refresh">刷新</button>
+        <button type="button" id="btn-open-cwd">打开 .env 目录</button>
+      </div>
+
+      <p id="error" class="error" hidden></p>
+      <p class="hint">
+        CLI 仍可用：<code>npm run dev:bridge</code>。勿与桌面 App 双开占同一端口。关闭窗口会藏到托盘，不杀
+        Bridge。
+      </p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -97,7 +97,7 @@ describe("workspace ensure", () => {
           repos: [{ id: "r1", remote_url: remoteBare }],
         },
       });
-      assert.equal(denied.statusCode, 401);
+      assert.equal(denied.statusCode, 400);
 
       const ok = await app.inject({
         method: "POST",

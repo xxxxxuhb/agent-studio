@@ -5,6 +5,7 @@
 | [环境配置指南.md](./环境配置指南.md) | `.env`、**Docker MySQL**、JWT / Bridge / Git bot / SSH |
 | [本地Dify与GitLab搭建指南.md](./本地Dify与GitLab搭建指南.md) | 本机起 GitLab、Dify，并接到 Agent Studio |
 | [架构与时序图.md](./架构与时序图.md) | 系统架构、工单时序、鉴权、数据落盘（Mermaid） |
+| [问题记录.md](./问题记录.md) | 联调踩坑与根因（按时间倒序） |
 | [../README.md](../README.md) | 仓库简介与日常启动命令 |
 | [../deploy/](../deploy/) | Docker Compose：MySQL / GitLab / Dify |
 | [../apps/studio-api/sql/](../apps/studio-api/sql/) | `init.sql` 一键建库建表 |

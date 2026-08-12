@@ -39,7 +39,10 @@ export async function requireBridgeHttpAuth(
 
   const got = extractRequestToken(req);
   if (!got || got !== expected) {
-    return reply.code(401).send({
+    // Use 400 (not 401/403): Dify's ssrf_proxy client treats any 401/403 that
+    // passes through Squid (Via: squid) as "blocked by SSRF protection", which
+    // hides the real Bridge HTTP auth failure from workflow users.
+    return reply.code(400).send({
       error: "unauthorized",
       message:
         "Bridge HTTP auth required: Authorization: Bearer <token> or X-Bridge-Token",

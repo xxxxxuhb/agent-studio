@@ -40,6 +40,12 @@ import {
   formatOpenQuestionFeedback,
   parseOpenQuestions,
 } from "@agent-studio/agent-schema";
+import type { OrchestratorOutcome } from "@agent-studio/orchestrator";
+import {
+  runStudioDecision,
+  runStudioStart,
+  studioStateFromOutcome,
+} from "./studio-orchestrator.adapter";
 import {
   languageDirective,
   reviewCommitDirective,
@@ -52,6 +58,7 @@ import {
   isHumanFormExpired,
   isInvalidOrExpiredHumanFormError,
   isTransientDifyFailure,
+  explainDifyBridgeError,
   resolveDifyBridgeBase,
   resolveStudioBridgeBase,
   shouldClearFormTokenOnRemoteStatus,
@@ -121,6 +128,8 @@ export class WorkOrdersService implements OnModuleInit {
   private readonly autoApproveInFlight = new Set<string>();
   /** Serialize syncDify per work order (web poll + gateway poll). */
   private readonly syncInFlight = new Map<string, Promise<WorkOrder>>();
+  /** Studio orchestrator jobs (start/decide) — must not block HTTP. */
+  private readonly studioInFlight = new Map<string, Promise<void>>();
   /** Dedupe agent form/body logs within process lifetime. */
   private readonly loggedBodies = new Set<string>();
   /** Serialize Bridge-idle queue admission per team. */
@@ -152,6 +161,7 @@ export class WorkOrdersService implements OnModuleInit {
   }
 
   private toWorkOrder(entity: WorkOrderEntity): WorkOrder {
+    const run = this.normalizeRunPayload(entity.run ?? null);
     return WorkOrderSchema.parse({
       id: entity.id,
       team_id: entity.team_id || "",
@@ -164,10 +174,33 @@ export class WorkOrdersService implements OnModuleInit {
       priority: entity.priority || "medium",
       tags: entity.tags || [],
       clarifications: entity.clarifications || [],
-      run: entity.run ?? null,
+      run,
       created_at: entity.created_at?.toISOString?.() || undefined,
       updated_at: entity.updated_at?.toISOString?.() || undefined,
     });
+  }
+
+  /** Soft-repair run JSON so one bad event cannot break work-order list. */
+  private normalizeRunPayload(run: unknown): unknown {
+    if (!run || typeof run !== "object") return run;
+    const r = { ...(run as Record<string, unknown>) };
+    if (Array.isArray(r.events)) {
+      r.events = r.events.map((e, i) => {
+        if (!e || typeof e !== "object") return e;
+        const ev = { ...(e as Record<string, unknown>) };
+        if (typeof ev.id !== "string" || !String(ev.id).trim()) {
+          ev.id = `ev-fix-${i}-${randomUUID().slice(0, 8)}`;
+        }
+        if (typeof ev.at !== "string" || !ev.at) {
+          ev.at = this.nowIso();
+        }
+        if (typeof ev.message !== "string") {
+          ev.message = String(ev.message ?? "");
+        }
+        return ev;
+      });
+    }
+    return r;
   }
 
   private toEntityFields(order: WorkOrder): Partial<WorkOrderEntity> {
@@ -242,9 +275,14 @@ export class WorkOrdersService implements OnModuleInit {
               : event.type === "info" && /选仓|总管/.test(event.message)
                 ? ("manager" as const)
                 : ("system" as const);
-    void this.runLogs.log(order, {
+    this.mirrorRunLog(order, {
       source,
-      level: event.level === "warn" ? "warn" : event.level === "error" ? "error" : "info",
+      level:
+        event.level === "warn"
+          ? "warn"
+          : event.level === "error"
+            ? "error"
+            : "info",
       message: event.message,
       step_id: event.step_id,
       agent: event.agent,
@@ -259,6 +297,19 @@ export class WorkOrdersService implements OnModuleInit {
       },
       id: `evt-${event.id}`,
       at: event.at,
+    });
+  }
+
+  private mirrorRunLog(
+    order: WorkOrder,
+    partial: Parameters<RunLogsService["log"]>[1],
+  ) {
+    void this.runLogs.log(order, partial).catch((err) => {
+      this.logger.error(
+        `run-log mirror failed for ${order.id}/${order.run?.run_id || "-"}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     });
   }
 
@@ -347,7 +398,17 @@ export class WorkOrdersService implements OnModuleInit {
     if (filters?.status && filters.status !== "all") {
       where.status = filters.status;
     }
-    let items = (await this.repo.find({ where })).map((e) => this.toWorkOrder(e));
+    let items = (await this.repo.find({ where }))
+      .map((e) => {
+        try {
+          return this.toWorkOrder(e);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.error(`skip corrupt work order ${e.id}: ${msg}`);
+          return null;
+        }
+      })
+      .filter((w): w is WorkOrder => Boolean(w));
     if (filters?.q?.trim()) {
       const needle = filters.q.trim().toLowerCase();
       items = items.filter(
@@ -839,9 +900,11 @@ export class WorkOrdersService implements OnModuleInit {
       throw new BadRequestException(`流水线已停用: ${pipeline.id}`);
     }
 
-    const executor = "dify";
-    // Validates global enabled + pipeline/global App Key
-    this.difyConfig.resolveAuthForPipeline(pipeline);
+    const executor = body.executor === "dify" ? "dify" : "studio";
+    if (executor === "dify") {
+      // Validates global enabled + pipeline/global App Key
+      this.difyConfig.resolveAuthForPipeline(pipeline);
+    }
 
     const cfg = this.difyConfig.getEffectiveForTeam(order.team_id || "");
     const resolved = await this.bridges.resolveForNewRun({
@@ -860,6 +923,11 @@ export class WorkOrdersService implements OnModuleInit {
       registeredBaseUrl: resolved.registeredBaseUrl,
     };
     const difyBridgeBase = resolveDifyBridgeBase({
+      override: body.bridge_base_url,
+      registeredBaseUrl: bridgePick.registeredBaseUrl,
+      configured: cfg.bridge_base_url,
+    });
+    const studioBridgeBase = resolveStudioBridgeBase({
       override: body.bridge_base_url,
       registeredBaseUrl: bridgePick.registeredBaseUrl,
       configured: cfg.bridge_base_url,
@@ -907,7 +975,8 @@ export class WorkOrdersService implements OnModuleInit {
       status: "running",
       pipeline_id: pipeline.id,
       run: {
-        run_id: randomUUID().slice(0, 8),
+        // 16 hex chars: 8-char prefixes collided and crashed run_logs INSERT.
+        run_id: randomUUID().replace(/-/g, "").slice(0, 16),
         pipeline_id: pipeline.id,
         pipeline_name: pipeline.name,
         executor,
@@ -948,6 +1017,14 @@ export class WorkOrdersService implements OnModuleInit {
       });
     }
 
+    if (executor === "studio") {
+      return this.startStudioFromDraft(order, next, {
+        agents_md_path: routing.agents_md_path,
+        routing_mode: routing.routing_mode,
+        bridge_base_url: studioBridgeBase,
+      });
+    }
+
     return this.startDifyFromDraft(order, next, {
       agents_md_path: routing.agents_md_path,
       routing_mode: routing.routing_mode,
@@ -973,10 +1050,10 @@ export class WorkOrdersService implements OnModuleInit {
       status: "queued",
       pipeline_id: pipeline.id,
       run: {
-        run_id: `q-${randomUUID().slice(0, 8)}`,
+        run_id: `q-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
         pipeline_id: pipeline.id,
         pipeline_name: pipeline.name,
-        executor: "dify",
+        executor: body.executor === "dify" ? "dify" : "studio",
         auto_approve: Boolean(body.auto_approve),
         current_step_index: 0,
         steps: [],
@@ -988,6 +1065,7 @@ export class WorkOrdersService implements OnModuleInit {
           agents_md_path: body.agents_md_path,
           bridge_base_url: body.bridge_base_url,
           reuse_previous_routing: Boolean(body.reuse_previous_routing),
+          executor: body.executor === "dify" ? "dify" : "studio",
           enqueued_at: stamp,
           note,
         },
@@ -1046,6 +1124,7 @@ export class WorkOrdersService implements OnModuleInit {
           agents_md_path: pending.agents_md_path,
           bridge_base_url: pending.bridge_base_url,
           reuse_previous_routing: pending.reuse_previous_routing,
+          executor: pending.executor === "dify" ? "dify" : "studio",
         });
       } catch (err) {
         this.logger.warn(
@@ -1077,7 +1156,7 @@ export class WorkOrdersService implements OnModuleInit {
         "缺少 pipeline_id：请先指定流水线，或先跑过一次再「重新执行」",
       );
     }
-    const executor = body.executor || order.run?.executor || "dify";
+    const executor = body.executor || order.run?.executor || "studio";
 
     if (order.status === "running" || order.status === "pending_approval") {
       await this.rejectAndEnd(
@@ -1115,6 +1194,297 @@ export class WorkOrdersService implements OnModuleInit {
   ): Promise<WorkOrder> {
     await this.requireWritableWorkOrder(userId, id);
     return this.restart(id, input);
+  }
+
+  /** Drive Bridge stages via `@agent-studio/orchestrator` (no Dify). */
+  private async startStudioFromDraft(
+    previous: WorkOrder,
+    draft: WorkOrder,
+    opts: {
+      agents_md_path?: string;
+      routing_mode?: "auto" | "explicit";
+      bridge_base_url?: string;
+    },
+  ): Promise<WorkOrder> {
+    void previous;
+    if (!draft.run) throw new BadRequestException("run missing");
+    const bridgeBase =
+      (opts.bridge_base_url || "").trim() || "http://127.0.0.1:8787";
+    const stamp = this.nowIso();
+    const agentsMdPath =
+      opts.agents_md_path || draft.run.selected_agents_md_path || "auto";
+    const routingMode = opts.routing_mode || "explicit";
+    const autoApprove = Boolean(draft.run.auto_approve);
+
+    draft.run.studio = {
+      bridge_run_id: draft.run.studio?.bridge_run_id || "",
+      bridge_base_url: bridgeBase,
+      current_stage: draft.run.studio?.current_stage || "",
+      last_summary: "Studio 编排启动中…",
+      pending_human: false,
+      dry_run: Boolean(draft.run.studio?.dry_run),
+      status: "starting",
+      error: null,
+      last_synced_at: stamp,
+    };
+    const first = draft.run.steps[0];
+    if (first && first.status === "pending") {
+      first.status = "running";
+      first.started_at = stamp;
+    }
+    this.appendRunEvent(draft, {
+      type: "info",
+      message: "Studio 编排已提交（后台执行 Bridge 阶段，页面可刷新查看进度）",
+    });
+    const saved = await this.write(draft);
+    this.enqueueStudioJob(saved.id, saved.run!.run_id, async (order) => {
+      const humans = await this.humans.list({ enabled: "all" });
+      const outcome = await runStudioStart({
+        order,
+        bridgeBaseUrl: bridgeBase,
+        agentsMdPath,
+        routingMode,
+        humans,
+        autoApprove,
+      });
+      const latest = await this.get(order.id);
+      if (latest.run?.run_id !== order.run?.run_id) return;
+      await this.applyStudioOutcome(latest, outcome, bridgeBase);
+    });
+    return saved;
+  }
+
+  private async decideStudio(
+    id: string,
+    body: {
+      decision?: "approve" | "reject";
+      action?: string;
+      feedback?: string;
+    },
+  ): Promise<WorkOrder> {
+    let order = await this.get(id);
+    if (
+      order.status !== "pending_approval" &&
+      !order.run?.studio?.pending_human
+    ) {
+      throw new BadRequestException("当前没有待确认的人工闸门");
+    }
+    const decision =
+      body.decision ||
+      (body.action && /reject|驳回|拒绝/i.test(body.action)
+        ? "reject"
+        : "approve");
+    this.appendRunEvent(order, {
+      type: "human_decision",
+      message: `提交确认：${decision}${body.feedback ? ` · 反馈=${body.feedback}` : ""}`,
+      action: decision,
+      step_id: order.run?.steps[order.run.current_step_index]?.step_id,
+      agent: order.run?.steps[order.run.current_step_index]?.agent,
+    });
+    if (order.run?.studio) {
+      order.run.studio.status = "running";
+      order.run.studio.pending_human = false;
+      order.run.studio.last_summary = `已提交 ${decision}，继续编排中…`;
+      order.run.studio.last_synced_at = this.nowIso();
+    }
+    order.status = "running";
+    const step = order.run?.steps[order.run.current_step_index];
+    if (step) step.status = "running";
+    const saved = await this.write(order);
+    const bridgeBase =
+      saved.run?.studio?.bridge_base_url || "http://127.0.0.1:8787";
+    const feedback = body.feedback || "";
+    this.enqueueStudioJob(saved.id, saved.run!.run_id, async (current) => {
+      const humans = await this.humans.list({ enabled: "all" });
+      const outcome = await runStudioDecision({
+        order: current,
+        decision,
+        feedback,
+        humans,
+      });
+      const latest = await this.get(current.id);
+      if (latest.run?.run_id !== current.run?.run_id) return;
+      await this.applyStudioOutcome(latest, outcome, bridgeBase);
+    });
+    return saved;
+  }
+
+  /** Run Studio orchestrator off the request path; ignore if a newer run replaced it. */
+  private enqueueStudioJob(
+    workOrderId: string,
+    runId: string,
+    job: (order: WorkOrder) => Promise<void>,
+  ): void {
+    const prev = this.studioInFlight.get(workOrderId);
+    const run = (async () => {
+      if (prev) {
+        try {
+          await prev;
+        } catch {
+          /* previous job failure already persisted */
+        }
+      }
+      try {
+        const order = await this.get(workOrderId);
+        if (order.run?.run_id !== runId) return;
+        await job(order);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `studio orchestrator failed for ${workOrderId}/${runId}: ${msg}`,
+        );
+        try {
+          const latest = await this.get(workOrderId);
+          if (latest.run?.run_id !== runId || !latest.run) return;
+          latest.status = "failed";
+          latest.run.finished_at = this.nowIso();
+          if (latest.run.studio) {
+            latest.run.studio.status = "failed";
+            latest.run.studio.error = msg;
+            latest.run.studio.last_synced_at = this.nowIso();
+          }
+          const step = latest.run.steps[latest.run.current_step_index];
+          if (step) {
+            step.status = "failed";
+            step.summary = msg;
+            step.finished_at = this.nowIso();
+          }
+          this.appendRunEvent(latest, {
+            type: "run_finished",
+            level: "error",
+            message: `Studio 编排失败：${msg}`,
+          });
+          await this.write(latest);
+        } catch (persistErr) {
+          this.logger.error(
+            `failed to persist studio error for ${workOrderId}: ${
+              persistErr instanceof Error ? persistErr.message : String(persistErr)
+            }`,
+          );
+        }
+      }
+    })();
+    this.studioInFlight.set(
+      workOrderId,
+      run.finally(() => {
+        if (this.studioInFlight.get(workOrderId) === run) {
+          this.studioInFlight.delete(workOrderId);
+        }
+      }),
+    );
+  }
+
+  private async applyStudioOutcome(
+    order: WorkOrder,
+    outcome: OrchestratorOutcome,
+    bridgeBaseUrl: string,
+  ): Promise<WorkOrder> {
+    if (!order.run) throw new BadRequestException("run missing");
+    const stamp = this.nowIso();
+    const state = studioStateFromOutcome(outcome, bridgeBaseUrl);
+    order.run.studio = {
+      bridge_run_id: state.bridge_run_id || "",
+      bridge_base_url: state.bridge_base_url || bridgeBaseUrl,
+      current_stage: state.current_stage || "",
+      last_summary: state.last_summary || "",
+      pending_human: Boolean(state.pending_human),
+      dry_run: Boolean(state.dry_run),
+      status: state.status || outcome.kind,
+      error: state.error ?? null,
+      last_synced_at: stamp,
+    };
+
+    const idx = outcome.step_index;
+    const step = order.run.steps[idx];
+    const summary =
+      outcome.kind === "failed"
+        ? outcome.error
+        : "summary" in outcome
+          ? outcome.summary
+          : state.last_summary || "";
+
+    if (step) {
+      step.summary = summary || step.summary;
+      if ("stage_result" in outcome && outcome.stage_result) {
+        step.output = outcome.stage_result.summary || step.output;
+        step.output_title =
+          step.output_title || step.label || outcome.stage_result.stage;
+      }
+    }
+
+    if (outcome.kind === "pending_approval") {
+      order.status = "pending_approval";
+      order.run.current_step_index = idx;
+      if (step) {
+        step.status = "pending_approval";
+        step.started_at = step.started_at || stamp;
+      }
+      this.appendRunEvent(order, {
+        type: "human_input_required",
+        message: `等待人工确认：${step?.label || step?.step_id || outcome.stage}`,
+        step_id: step?.step_id,
+        agent: step?.agent,
+        detail: { stage: outcome.stage },
+      });
+      this.appendRunEvent(order, {
+        type: "bridge_stage",
+        message: summary || `stage ${outcome.stage}`,
+        step_id: step?.step_id,
+        agent: step?.agent,
+      });
+    } else if (outcome.kind === "running") {
+      order.status = "running";
+      order.run.current_step_index = idx;
+      if (step) {
+        step.status = "running";
+        step.started_at = step.started_at || stamp;
+      }
+    } else if (outcome.kind === "completed") {
+      for (const s of order.run.steps) {
+        if (s.status !== "rejected") {
+          s.status = "approved";
+          s.finished_at = s.finished_at || stamp;
+          s.summary = s.summary || "Studio 编排已完成";
+        }
+      }
+      order.run.current_step_index = Math.max(0, order.run.steps.length - 1);
+      order.status = "completed";
+      this.appendRunEvent(order, {
+        type: "run_finished",
+        message: "当前仓流水线完成（Studio orchestrator）",
+        dry_run: state.dry_run,
+      });
+      return this.finishCurrentRepoAndContinue(order);
+    } else if (outcome.kind === "rejected") {
+      order.status = "rejected";
+      order.run.finished_at = stamp;
+      if (step) {
+        step.status = "rejected";
+        step.finished_at = stamp;
+        step.feedback = summary;
+      }
+      this.appendRunEvent(order, {
+        type: "run_finished",
+        level: "warn",
+        message: `运行结束：rejected${summary ? ` · ${summary}` : ""}`,
+      });
+    } else if (outcome.kind === "failed") {
+      order.status = "failed";
+      order.run.finished_at = stamp;
+      if (step) {
+        step.status = "failed";
+        step.finished_at = stamp;
+        step.summary = outcome.error;
+      }
+      this.appendRunEvent(order, {
+        type: "run_finished",
+        level: "error",
+        message: `运行结束：failed · ${outcome.error}`,
+      });
+    }
+
+    const saved = await this.write(order);
+    return this.maybeAutoApproveHumanGate(saved);
   }
 
   /** Call Dify first, then persist — avoids stuck running without remote binding. */
@@ -1266,6 +1636,26 @@ export class WorkOrdersService implements OnModuleInit {
 
     let started;
     try {
+      const tokenSet = Boolean(String(inputs.bridge_token || "").trim());
+      const pipelineAppId = pipeline.dify?.app_id?.trim() || "";
+      const bindingEnabled = Boolean(pipeline.dify?.enabled);
+      this.logger.log(
+        `dify start ${draft.id}: bridge_base_url=${inputs.bridge_base_url} bridge_token=${tokenSet ? "set" : "EMPTY"} binding=${auth.source}` +
+          (pipelineAppId
+            ? ` pipeline_app_id=${pipelineAppId}${bindingEnabled ? "" : " (ignored: pipeline Dify binding disabled)"}`
+            : ""),
+      );
+      if (pipelineAppId && !bindingEnabled && auth.source !== "pipeline") {
+        this.logger.warn(
+          `dify start ${draft.id}: pipeline has app_id=${pipelineAppId} but Dify binding is disabled; ` +
+            `run uses ${auth.source} App Key (may be a different Dify app than the one DSL was imported into)`,
+        );
+      }
+      if (!tokenSet) {
+        throw new BadRequestException(
+          "未配置 Bridge HTTP token（BRIDGE_HTTP_TOKEN / STUDIO_BRIDGE_TOKEN）。Dify 经 host.docker.internal 访问 Bridge 时会被鉴权拒绝，并常被误报为 SSRF。",
+        );
+      }
       started = await this.difyClient.startWorkflow({ inputs, user, auth });
     } catch (err) {
       // never persist running on failure
@@ -1413,12 +1803,19 @@ export class WorkOrdersService implements OnModuleInit {
 
   async syncDify(id: string): Promise<WorkOrder> {
     const existing = this.syncInFlight.get(id);
-    if (existing) return existing;
+    // Join in-flight core sync, then auto-approve outside the lock.
+    // Auto-approve → decide → syncDify must NOT run while syncInFlight still
+    // holds this promise, or we deadlock and the work order stays "running".
+    if (existing) {
+      const order = await existing;
+      return this.maybeAutoApproveHumanGate(order);
+    }
     const pending = this.syncDifyUnlocked(id).finally(() => {
       this.syncInFlight.delete(id);
     });
     this.syncInFlight.set(id, pending);
-    return pending;
+    const order = await pending;
+    return this.maybeAutoApproveHumanGate(order);
   }
 
   private async syncDifyUnlocked(id: string): Promise<WorkOrder> {
@@ -1633,6 +2030,7 @@ export class WorkOrdersService implements OnModuleInit {
     const softFailed =
       detail.status === "failed" &&
       isTransientDifyFailure(detail.error || "");
+    const explainedError = explainDifyBridgeError(detail.error || "");
 
     this.applyDifyStatusToOrder(order, detail.status, {
       // Transient Bridge/network failures still end this run; mark retryable in summary.
@@ -1645,14 +2043,14 @@ export class WorkOrdersService implements OnModuleInit {
 
     if (softFailed && order.run.dify) {
       order.run.dify.raw_summary = [
-        "Dify 工作流已失败（下游瞬时错误，常见于 Bridge 掉线/503/不可达）。",
-        "本次 run 已结束；确认 Bridge 在线后点「重新执行」。",
-        detail.error || "unknown error",
+        "Dify 工作流已失败（下游瞬时错误，常见于 Bridge 鉴权失败被误报为 SSRF / Bridge 掉线）。",
+        "本次 run 已结束；确认 Bridge 在线且 HTTP token 一致后点「重新执行」。",
+        explainedError || "unknown error",
       ].join(" ");
     } else if (detail.status === "failed" && order.run.dify && !softFailed) {
       order.run.dify.raw_summary = [
         order.run.dify.raw_summary || "",
-        detail.error ? `失败原因: ${detail.error}` : "",
+        explainedError ? `失败原因: ${explainedError}` : "",
         "修好问题后可点「重新执行」。",
       ]
         .filter(Boolean)
@@ -1696,15 +2094,15 @@ export class WorkOrdersService implements OnModuleInit {
         type: "run_finished",
         level: softFailed ? "warn" : "error",
         message: softFailed
-          ? `运行结束（可重新执行）：Bridge/网络瞬时失败${detail.error ? ` · ${detail.error}` : ""}`
-          : `运行结束：${order.status}${detail.error ? ` · ${detail.error}` : ""}`,
+          ? `运行结束（可重新执行）：Bridge/网络瞬时失败${explainedError ? ` · ${explainedError}` : ""}`
+          : `运行结束：${order.status}${explainedError ? ` · ${explainedError}` : ""}`,
         dify_status: detail.status,
         detail: softFailed ? { retryable: true } : undefined,
       });
     }
 
-    const saved = await this.write(order);
-    return this.maybeAutoApproveHumanGate(saved);
+    // Auto-approve runs in syncDify() after syncInFlight is cleared.
+    return await this.write(order);
   }
 
   async syncDifyForUser(userId: string, id: string): Promise<WorkOrder> {
@@ -1723,7 +2121,8 @@ export class WorkOrdersService implements OnModuleInit {
 
     const waiting =
       order.status === "pending_approval" ||
-      order.run.dify?.status === "paused";
+      order.run.dify?.status === "paused" ||
+      Boolean(order.run.studio?.pending_human);
     if (!waiting) return order;
 
     if (order.run.executor === "dify" && !order.run.dify?.form_token) {
@@ -1820,6 +2219,9 @@ export class WorkOrdersService implements OnModuleInit {
     const body = WorkOrderDecisionSchema.parse(input);
     const order = await this.get(id);
     if (!order.run) throw new BadRequestException("工单尚未启动流水线");
+    if (order.run.executor === "studio") {
+      return this.decideStudio(id, body);
+    }
     return this.decideDify(id, body);
   }
 
@@ -2149,7 +2551,7 @@ export class WorkOrdersService implements OnModuleInit {
         }
       }
       run.current_step_index = Math.max(0, steps.length - 1);
-      void this.runLogs.log(order, {
+      this.mirrorRunLog(order, {
         source: "pipeline",
         message: "流水线全部步骤已完成（Dify succeeded）",
         event_type: "run_finished",
@@ -2167,7 +2569,7 @@ export class WorkOrdersService implements OnModuleInit {
         cur.finished_at = this.nowIso();
         cur.output_title = cur.output_title || order.run?.dify?.form_node_title || cur.label;
         cur.output = this.buildDifyStepOutput(order);
-        void this.runLogs.log(order, {
+        this.mirrorRunLog(order, {
           source: "pipeline",
           level: "error",
           message: cur.summary,
@@ -2234,7 +2636,7 @@ export class WorkOrdersService implements OnModuleInit {
         order.run?.dify?.form_node_title || cur.output_title || cur.label;
       cur.output = this.buildDifyStepOutput(order);
       if (prevStatus !== "pending_approval") {
-        void this.runLogs.log(order, {
+        this.mirrorRunLog(order, {
           source: "pipeline",
           message: `流水线步骤 ${cur.label || cur.step_id} → 待确认`,
           step_id: cur.step_id,
@@ -2247,7 +2649,7 @@ export class WorkOrdersService implements OnModuleInit {
       const formKey = `${order.run?.run_id}:form:${form.length}:${form.slice(0, 80)}`;
       if (form && !this.loggedBodies.has(formKey)) {
         this.loggedBodies.add(formKey);
-        void this.runLogs.log(order, {
+        this.mirrorRunLog(order, {
           source: "agent",
           message: order.run?.dify?.form_node_title || "Dify Human Input / Agent 产出",
           body: form,
@@ -2265,7 +2667,7 @@ export class WorkOrdersService implements OnModuleInit {
         order.run?.dify?.form_node_title || cur.output_title || cur.label;
       cur.output = this.buildDifyStepOutput(order);
       if (prevStatus !== "running") {
-        void this.runLogs.log(order, {
+        this.mirrorRunLog(order, {
           source: "pipeline",
           message: `流水线步骤 ${cur.label || cur.step_id} → 执行中`,
           body: cur.output || "",
@@ -2445,6 +2847,17 @@ export class WorkOrdersService implements OnModuleInit {
     const registered = await this.bridges.pickRegisteredBaseUrl({
       teamId: saved.team_id,
     });
+    const executor = saved.run?.executor === "dify" ? "dify" : "studio";
+    if (executor === "studio") {
+      return this.startStudioFromDraft(saved, saved, {
+        agents_md_path: saved.run?.selected_agents_md_path,
+        routing_mode: "explicit",
+        bridge_base_url: resolveStudioBridgeBase({
+          registeredBaseUrl: registered,
+          configured: cfg.bridge_base_url,
+        }),
+      });
+    }
     return this.startDifyFromDraft(saved, saved, {
       agents_md_path: saved.run?.selected_agents_md_path,
       routing_mode: "explicit",

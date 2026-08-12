@@ -25,7 +25,7 @@ export const workOrdersApi = {
     id: string,
     body: {
       pipeline_id: string;
-      executor?: "dify";
+      executor?: "dify" | "studio";
       auto_approve?: boolean;
       agents_md_path?: string;
       bridge_base_url?: string;
@@ -37,7 +37,7 @@ export const workOrdersApi = {
     id: string,
     body: {
       pipeline_id?: string;
-      executor?: "dify";
+      executor?: "dify" | "studio";
       auto_approve?: boolean;
       agents_md_path?: string;
       bridge_base_url?: string;
