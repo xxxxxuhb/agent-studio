@@ -12,19 +12,12 @@ import {
 } from "@nestjs/common";
 import type { PipelineCreate, PipelineUpdate } from "@agent-studio/agent-schema";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
-import { DifyClientService } from "../dify/dify-client.service";
-import { DifyConfigService } from "../dify/dify-config.service";
-import { generateDifyWorkflowDsl } from "../dify/dify-dsl.generator";
-import { DigitalHumansService } from "../digital-humans/digital-humans.service";
 import { PipelinesService } from "./pipelines.service";
 
 @Controller()
 export class PipelinesController {
   constructor(
     @Inject(PipelinesService) private readonly pipelines: PipelinesService,
-    @Inject(DigitalHumansService) private readonly humans: DigitalHumansService,
-    @Inject(DifyConfigService) private readonly difyConfig: DifyConfigService,
-    @Inject(DifyClientService) private readonly difyClient: DifyClientService,
   ) {}
 
   @Get("pipelines")
@@ -58,106 +51,6 @@ export class PipelinesController {
   @Get("pipelines/:id")
   get(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     return this.pipelines.getPublicForUser(user.id, id);
-  }
-
-  @Get("pipelines/:id/dify-dsl")
-  async difyDsl(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    const pipeline = await this.pipelines.getForUser(user.id, id);
-    const agents = new Map(
-      (await this.humans.list({ enabled: "all" })).map((h) => [h.id, h]),
-    );
-    const yaml = generateDifyWorkflowDsl({ pipeline, agents });
-    return {
-      pipeline_id: pipeline.id,
-      filename: `${pipeline.id}.dify.yml`,
-      yaml,
-      hint: "下载后在 Dify 工作室「创建应用 → 导入 DSL」；导入后把 App Key 填回本流水线的 Dify 绑定。",
-    };
-  }
-
-  @Post("pipelines/:id/dify-import")
-  async difyImport(
-    @CurrentUser() user: RequestUser,
-    @Param("id") id: string,
-    @Body() body?: { overwrite?: boolean },
-  ) {
-    const pipeline = await this.pipelines.getForUser(user.id, id);
-    const agents = new Map(
-      (await this.humans.list({ enabled: "all" })).map((h) => [h.id, h]),
-    );
-    const yaml = generateDifyWorkflowDsl({ pipeline, agents });
-    const overwrite = Boolean(body?.overwrite);
-    const existingAppId = pipeline.dify?.app_id?.trim() || "";
-
-    const teamId = (pipeline.team_id || "").trim() || undefined;
-    const imported = await this.difyClient.importDsl({
-      yaml,
-      name: pipeline.name,
-      description: pipeline.description || undefined,
-      app_id: overwrite && existingAppId ? existingAppId : undefined,
-      team_id: teamId,
-    });
-
-    const appId = imported.app_id || existingAppId;
-    let published: { ok: boolean; version?: string } | null = null;
-    if (appId) {
-      // App API 只跑已发布版本；导入仅改草稿，必须发布否则仍是旧图。
-      published = await this.difyClient.publishWorkflow(appId, { team_id: teamId });
-    }
-
-    let pipelinePublic = await this.pipelines.getPublicForUser(user.id, id);
-    if (appId) {
-      pipelinePublic = await this.pipelines.updateForUser(user.id, id, {
-        dify: {
-          ...(pipeline.dify || {}),
-          enabled: pipeline.dify?.enabled ?? false,
-          app_id: appId,
-          note: `由 Studio 于 ${new Date().toISOString()} 导入并发布 DSL`,
-        },
-      });
-    }
-
-    const bindingEnabled = Boolean(pipeline.dify?.enabled);
-    const hint = !appId
-      ? "DSL 已提交导入，但未返回 app_id；请到 Dify 工作室确认应用是否创建成功。"
-      : !published?.ok
-        ? "DSL 已导入，但发布结果未知；请到 Dify 工作室确认已发布。"
-        : bindingEnabled
-          ? "DSL 已导入并发布。运行将使用本流水线绑定的 App API Key。"
-          : "DSL 已导入并发布到上述 app_id，但本流水线未启用 Dify 绑定：实际运行仍走团队/全局 App Key（可能是另一个旧 App）。请启用绑定并填写该 App 的 Workflow API Key，否则改鉴权不会生效。";
-
-    return {
-      ok: true,
-      status: imported.status,
-      app_id: appId || "",
-      import_id: imported.import_id || "",
-      published: Boolean(published?.ok),
-      published_version: published?.version || "",
-      pipeline: pipelinePublic,
-      binding_enabled: bindingEnabled,
-      hint,
-    };
-  }
-
-  @Post("pipelines/:id/dify-health")
-  async difyHealth(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    const pipeline = await this.pipelines.getForUser(user.id, id);
-    try {
-      const auth = this.difyConfig.resolveAuthForPipeline(pipeline);
-      const parameters = await this.difyClient.getParameters(auth);
-      return {
-        ok: true,
-        binding_source: auth.source,
-        api_base: auth.api_base,
-        app_id: auth.app_id || "",
-        parameters,
-      };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
   }
 
   @Post("pipelines")

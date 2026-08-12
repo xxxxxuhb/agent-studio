@@ -94,11 +94,12 @@ async function runStepAtIndex(
     agents: StartStudioRunInput["agents"];
     state: StudioRunState;
     auto_approve?: boolean;
+    onProgress?: StartStudioRunInput["onProgress"];
   },
   stepIndex: number,
   feedback?: string,
 ): Promise<OrchestratorOutcome> {
-  const { bridge, steps, agents, state, auto_approve } = input;
+  const { bridge, steps, agents, state, auto_approve, onProgress } = input;
   if (stepIndex < 0 || stepIndex >= steps.length) {
     return {
       kind: "completed",
@@ -138,6 +139,16 @@ async function runStepAtIndex(
     auto_approve,
   });
 
+  if (onProgress) {
+    await onProgress({
+      state: pausedOrRunning.state,
+      step_index: stepIndex,
+      stage,
+      summary: result.summary,
+      stage_result: result,
+    });
+  }
+
   if (pausedOrRunning.kind !== "running") {
     return pausedOrRunning;
   }
@@ -165,6 +176,7 @@ async function runStepAtIndex(
       step_index: stepIndex,
       auto_approve,
       last_result: result,
+      onProgress,
     });
   }
 
@@ -179,6 +191,7 @@ async function continueAfterStep(opts: {
   step_index: number;
   auto_approve?: boolean;
   last_result?: StageResult;
+  onProgress?: StartStudioRunInput["onProgress"];
 }): Promise<OrchestratorOutcome> {
   const nextIndex = opts.step_index + 1;
   if (nextIndex >= opts.steps.length) {
@@ -197,6 +210,7 @@ async function continueAfterStep(opts: {
       agents: opts.agents,
       state: opts.state,
       auto_approve: opts.auto_approve,
+      onProgress: opts.onProgress,
     },
     nextIndex,
   );
@@ -241,6 +255,15 @@ export async function startStudioRun(
     error: null,
   };
 
+  if (input.onProgress) {
+    await input.onProgress({
+      state,
+      step_index: 0,
+      stage: "manager",
+      summary: state.last_summary || "manager ok",
+    });
+  }
+
   if (!input.steps.length) {
     return {
       kind: "completed",
@@ -257,6 +280,7 @@ export async function startStudioRun(
       agents: input.agents,
       state,
       auto_approve: input.auto_approve,
+      onProgress: input.onProgress,
     },
     0,
   );
@@ -303,7 +327,7 @@ export async function applyStudioDecision(
     const onReject = step.on_reject || "end";
     if (onReject === "retry_step") {
       return runStepAtIndex(
-        { bridge, steps, agents, state, auto_approve },
+        { bridge, steps, agents, state, auto_approve, onProgress: input.onProgress },
         current_step_index,
         feedback,
       );
@@ -312,7 +336,7 @@ export async function applyStudioDecision(
       const gotoIdx = steps.findIndex((s) => s.step_id === step.reject_goto);
       if (gotoIdx >= 0) {
         return runStepAtIndex(
-          { bridge, steps, agents, state, auto_approve },
+          { bridge, steps, agents, state, auto_approve, onProgress: input.onProgress },
           gotoIdx,
           feedback,
         );
@@ -339,5 +363,6 @@ export async function applyStudioDecision(
     state: { ...state, pending_human: false, status: "running" },
     step_index: current_step_index,
     auto_approve,
+    onProgress: input.onProgress,
   });
 }

@@ -7,7 +7,6 @@ import {
   Checkbox,
   Col,
   Descriptions,
-  Empty,
   Form,
   Input,
   List,
@@ -25,9 +24,11 @@ import {
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RobotOutlined,
 } from "@ant-design/icons";
 import type { DigitalHuman, DigitalHumanCreate, Role } from "@agent-studio/agent-schema";
 import { digitalHumansApi } from "../api/digital-humans";
+import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
 import { getSelectedTeam } from "../auth/session";
 
 const ROLES: Role[] = [
@@ -233,83 +234,77 @@ export function DigitalHumansPage() {
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Row justify="space-between" align="middle" gutter={[16, 16]}>
-        <Col>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            数字人
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            管理 Agent 档案：职责、权限、产物与启停（共 {total} 个）
-          </Typography.Text>
-        </Col>
-        <Col>
-          <Space wrap>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={async () => {
-                const r = await digitalHumansApi.seedDefaults(getSelectedTeam()?.id);
-                message.success(
-                  `导入 ${r.imported.length}，跳过 ${r.skipped.length}，共 ${r.total}`,
-                );
-                await reload();
-              }}
-            >
-              导入默认
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              新建数字人
-            </Button>
-          </Space>
-        </Col>
-      </Row>
+    <div className="page-shell">
+      <div className="page-toolbar">
+        <div className="page-toolbar-filters">
+          <Input.Search
+            allowClear
+            placeholder="搜索 id / 名称 / 标签"
+            style={{ width: 240 }}
+            onSearch={setQ}
+            onChange={(e) => {
+              if (!e.target.value) setQ("");
+            }}
+          />
+          <Select
+            value={enabled}
+            style={{ width: 120 }}
+            onChange={setEnabled}
+            options={[
+              { value: "all", label: "全部状态" },
+              { value: "true", label: "仅启用" },
+              { value: "false", label: "仅停用" },
+            ]}
+          />
+          <Select
+            allowClear
+            placeholder="全部角色"
+            style={{ width: 140 }}
+            value={role}
+            onChange={(v) => setRole(v)}
+            options={ROLES.map((r) => ({ value: r, label: r }))}
+          />
+          <span className="page-meta">{total} 个</span>
+        </div>
+        <div className="page-toolbar-actions">
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={async () => {
+              const r = await digitalHumansApi.seedDefaults(getSelectedTeam()?.id);
+              message.success(
+                `导入 ${r.imported.length}，跳过 ${r.skipped.length}，共 ${r.total}`,
+              );
+              await reload();
+            }}
+          >
+            导入默认
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建数字人
+          </Button>
+        </div>
+      </div>
 
-      <Space wrap>
-        <Input.Search
-          allowClear
-          placeholder="搜索 id / 名称 / 标签"
-          style={{ width: 260 }}
-          onSearch={setQ}
-          onChange={(e) => {
-            if (!e.target.value) setQ("");
-          }}
-        />
-        <Select
-          value={enabled}
-          style={{ width: 140 }}
-          onChange={setEnabled}
-          options={[
-            { value: "all", label: "全部状态" },
-            { value: "true", label: "仅启用" },
-            { value: "false", label: "仅停用" },
-          ]}
-        />
-        <Select
-          allowClear
-          placeholder="全部角色"
-          style={{ width: 160 }}
-          value={role}
-          onChange={(v) => setRole(v)}
-          options={ROLES.map((r) => ({ value: r, label: r }))}
-        />
-      </Space>
-
-      <Row gutter={16}>
-        <Col xs={24} md={8} lg={7}>
-          <Card size="small" title="列表" loading={loading}>
+      <div className="page-split page-split--narrow">
+        <aside className="pane">
+          <Card size="small" title="列表" loading={loading} className="pane-card">
             {!items.length ? (
-              <Empty description="暂无数字人" />
+              <EmptyRich
+                icon={<RobotOutlined />}
+                title="还没有数字人"
+                description="可导入默认角色，或新建 Agent 档案。"
+                action={
+                  <EmptyRichActionButton icon={<PlusOutlined />} onClick={openCreate}>
+                    新建数字人
+                  </EmptyRichActionButton>
+                }
+              />
             ) : (
               <List
                 dataSource={items}
                 renderItem={(a) => (
                   <List.Item
-                    style={{
-                      cursor: "pointer",
-                      background: a.id === selectedId ? "#e6f4ff" : undefined,
-                      borderRadius: 8,
-                      paddingInline: 8,
-                    }}
+                    className={`list-item-clickable${a.id === selectedId ? " list-item-active" : ""}`}
                     onClick={() => setSelectedId(a.id)}
                   >
                     <List.Item.Meta
@@ -325,11 +320,12 @@ export function DigitalHumansPage() {
               />
             )}
           </Card>
-        </Col>
+        </aside>
 
-        <Col xs={24} md={16} lg={17}>
+        <section className="pane">
           <Card
             size="small"
+            className="pane-card"
             title={selected ? selected.name : "详情"}
             extra={
               selected ? (
@@ -369,7 +365,11 @@ export function DigitalHumansPage() {
             }
           >
             {!selected ? (
-              <Empty description="选择左侧数字人，或新建一个" />
+              <EmptyRich
+                icon={<RobotOutlined />}
+                title="选择左侧数字人"
+                description="查看职责、权限与启停，或新建一个角色。"
+              />
             ) : (
               <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                 <Typography.Text type="secondary">
@@ -393,9 +393,9 @@ export function DigitalHumansPage() {
                     {selected.permissions.may_deploy}；人工门禁：
                     {selected.human_gate_default ? "开" : "关"}
                   </Descriptions.Item>
-                  <Descriptions.Item label="Dify Agent（元数据）">
+                  <Descriptions.Item label="Bridge stage 覆盖（可选）">
                     <Typography.Text type="secondary">
-                      仅备注，尚未作为执行器调用（步骤仍走流水线 Workflow → Bridge）
+                      可选元数据，映射到 schema 的 dify.agent_id（兼容字段）；步骤仍走 Studio 编排 → Bridge
                     </Typography.Text>
                     {selected.dify?.agent_id || selected.dify?.agent_name ? (
                       <div>
@@ -443,8 +443,8 @@ export function DigitalHumansPage() {
               </Space>
             )}
           </Card>
-        </Col>
-      </Row>
+        </section>
+      </div>
 
       <Modal
         title={editingId ? `编辑 ${editingId}` : "新建数字人"}
@@ -529,30 +529,30 @@ export function DigitalHumansPage() {
                 type="info"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="Dify Agent 绑定尚未实现"
-                description="下列字段只做展示/备注。真正执行仍是：流水线绑定 Workflow App → HTTP 调用本机 Bridge。云端 Dify Agent 作步骤执行器见 TODO。"
+                message="Bridge stage 覆盖（可选）"
+                description="下列字段写入 schema 的 dify.* 以保持兼容。真正执行仍是：Studio 编排 → HTTP 调用 Bridge。"
               />
             </Col>
             <Col span={12}>
               <Form.Item
                 name="dify_agent_id"
-                label="Dify Agent ID（未实现）"
-                extra="可选元数据，不参与当前执行"
+                label="Bridge stage override"
+                extra="可选，映射到 dify.agent_id"
               >
-                <Input placeholder="对应 Dify Agent / 节点 id" />
+                <Input placeholder="例如 stage / agent id" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item
                 name="dify_agent_name"
-                label="Dify Agent 名称（未实现）"
+                label="显示名（可选）"
                 extra="可选显示名"
               >
                 <Input placeholder="可选显示名" />
               </Form.Item>
             </Col>
             <Col span={24}>
-              <Form.Item name="dify_note" label="Dify 映射备注">
+              <Form.Item name="dify_note" label="备注">
                 <Input.TextArea rows={2} />
               </Form.Item>
             </Col>
@@ -588,6 +588,6 @@ export function DigitalHumansPage() {
           </Row>
         </Form>
       </Modal>
-    </Space>
+    </div>
   );
 }

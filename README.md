@@ -5,7 +5,8 @@
 - Monorepo（npm workspaces）
 - 后端：NestJS（`apps/studio-api`）
 - 前端：React + Vite（`apps/studio-web`）
-- Bridge：Fastify（`apps/studio-bridge`）— Dify HTTP 编排的执行端
+- Bridge：Fastify（`apps/studio-bridge`）— Studio 编排器的执行端
+- 编排：`packages/orchestrator`（按流水线步骤调 Bridge）
 - Agent 运行时：`packages/agent-runtime`（可切换 cursor / trae / qoder / 自定义驱动）
 - 共享契约：`packages/agent-schema`
 - 示例仓：`examples/demo-repo`
@@ -49,7 +50,7 @@ npm run dev:bridge   # 终端 3（Dify 执行需要）
 更完整的本地搭建与环境变量说明：
 
 - [docs/环境配置指南.md](docs/环境配置指南.md)
-- [docs/本地Dify与GitLab搭建指南.md](docs/本地Dify与GitLab搭建指南.md)
+- [docs/本地GitLab搭建指南.md](docs/本地GitLab搭建指南.md)
 - [docs/架构与时序图.md](docs/架构与时序图.md)
 - 项目 Skill：[skills/local-stack-setup/](skills/local-stack-setup/)（含 [mysql.md](skills/local-stack-setup/mysql.md)）
 - Docker Compose：[`deploy/`](deploy/)（MySQL / GitLab / Dify）
@@ -76,14 +77,13 @@ Bridge **不内嵌模型调用**；阶段执行委托给 `@agent-studio/agent-ru
 | GET/POST/PUT/PATCH/DELETE | `/api/digital-humans...` | 数字人 CRUD |
 | GET/POST/PUT/PATCH/DELETE | `/api/pipelines...` | 流水线 CRUD |
 | GET/POST/PUT/DELETE | `/api/projects...` | 项目 / 多仓 / clone |
-| GET | `/api/run-logs` | 运行日志列表（`q` 可搜 Studio/Dify/Bridge run、失败摘要、工单标题） |
+| GET | `/api/run-logs` | 运行日志列表（`q` 可搜 Studio/Bridge run、失败摘要、工单标题） |
 | GET | `/api/run-logs/:runId` | 某次运行的全部日志 |
 | GET/POST/DELETE | `/api/bridges...` | 执行器注册 / 心跳 / 列表 |
-| GET/PUT/POST | `/api/work-orders...` | 工单 / 启动 / 重启 / 同步 Dify |
-| GET/PUT | `/api/dify/config` | Dify 连接配置 |
-| POST | `/api/dify/console/login` | Console 邮箱密码登录 |
+| GET/PUT/POST | `/api/work-orders...` | 工单 / 启动 / 重启 / 审批 |
+| GET/PUT | `/api/settings` | Studio 设置（语言 / Bridge / Git） |
 
-Bridge（Dify HTTP 节点调用）：
+Bridge（Studio 编排器 HTTP 调用）：
 
 | Method | Path | 说明 |
 |--------|------|------|
@@ -120,11 +120,11 @@ npx @agent-studio/bridge start --driver cursor \
 
 侧栏 **执行器** 页可查看已注册 Bridge 及其 Agent 类型。
 
-## Dify 接入
+## Studio 编排（无 Dify）
 
-1. 设置页配置 `api_base` + App Key，启用 Dify；`bridge_base_url` 默认 `http://host.docker.internal:8787`。  
-2. 工单以 **Dify Workflow** 启动；Human Input 可在 Studio 确认。  
-3. 流水线页可生成/导入 DSL；详情页有运行日志。  
+1. 设置页配置 `bridge_base_url`（本机默认 `http://127.0.0.1:8787`）与可选 Git SSH。  
+2. 工单以 **Studio orchestrator**（`@agent-studio/orchestrator`）启动，按流水线步骤调 Bridge stages。  
+3. Human Input 在 Studio 确认；产物在 Bridge `docs/dify-runs/{run_id}/`（目录名历史遗留）。  
 
 ## 环境变量
 
@@ -135,8 +135,8 @@ npx @agent-studio/bridge start --driver cursor \
 | `STUDIO_PROJECT_DIR` | `data/projects` | 旧项目 YAML（一次性迁入 MySQL；非运行时） |
 | `STUDIO_REPOS_DIR` | macOS/Linux `~/AgentStudio`；Windows `C:\.agent-studio` | 可选：Studio UI 调试克隆根（工单工作区在 Bridge） |
 | `STUDIO_RUN_LOG_DIR` | `data/run-logs` | 旧运行日志（一次性迁入；非运行时） |
-| `STUDIO_BRIDGE_TOKEN` / `BRIDGE_HTTP_TOKEN` | — | Bridge 注册 + HTTP 鉴权（Dify/Studio → Bridge Bearer） |
-| `DIFY_*` | — | 见设置页 / `.env.example`；密钥优先 env 或 `data/dify-secrets.yaml` |
+| `STUDIO_BRIDGE_TOKEN` / `BRIDGE_HTTP_TOKEN` | — | Bridge 注册 + HTTP 鉴权（Studio → Bridge Bearer） |
+| `STUDIO_BRIDGE_BASE_URL` | — | 可选：覆盖设置里的 Bridge URL |
 | `AGENT_DRIVER` | `auto` | Bridge 使用的 agent 驱动 |
 | `CURSOR_API_KEY` | — | cursor 驱动 |
 | `BRIDGE_PORT` | `8787` | Bridge 端口 |

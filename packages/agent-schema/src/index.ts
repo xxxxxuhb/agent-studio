@@ -66,7 +66,10 @@ export const DigitalHumanSchema = z.object({
   enabled: z.boolean().default(true),
   avatar_label: z.string().optional().default(""),
   tags: z.array(z.string()).default([]),
-  /** Maps this digital human to a Dify Agent / node */
+  /**
+   * Legacy Bridge stage override (`dify.agent_id`). Prefer role / id mapping
+   * in `@agent-studio/orchestrator`; kept for existing MySQL rows.
+   */
   dify: DigitalHumanDifyBindingSchema.optional().default({}),
   updated_at: z.string().optional(),
   created_at: z.string().optional(),
@@ -123,7 +126,7 @@ export const PipelineSchema = z.object({
     })
     .default({ human_approval: true, on_reject: "end" }),
   steps: z.array(PipelineStepSchema).min(1),
-  /** One Studio pipeline ↔ one Dify Workflow App */
+  /** Legacy Dify Workflow binding (ignored by Studio orchestrator). */
   dify: PipelineDifyBindingSchema.optional().default({}),
   updated_at: z.string().optional(),
   created_at: z.string().optional(),
@@ -278,10 +281,10 @@ export const WorkOrderRunSchema = z.object({
   pipeline_name: z.string(),
   executor: z.preprocess(
     (v) => {
-      if (v === "local" || v == null || v === "") return "studio";
+      if (v === "local" || v === "dify" || v == null || v === "") return "studio";
       return v;
     },
-    z.enum(["dify", "studio"]),
+    z.literal("studio"),
   ).default("studio"),
   /**
    * When true, Studio auto-submits approve at human gates.
@@ -380,7 +383,15 @@ export const WorkOrderRunSchema = z.object({
       agents_md_path: z.string().optional(),
       bridge_base_url: z.string().optional(),
       reuse_previous_routing: z.boolean().optional().default(false),
-      executor: z.enum(["dify", "studio"]).optional().default("studio"),
+      executor: z.preprocess(
+        (v) => {
+          if (v === "local" || v === "dify" || v == null || v === "") {
+            return "studio";
+          }
+          return v;
+        },
+        z.literal("studio"),
+      ).optional().default("studio"),
       enqueued_at: z.string(),
       note: z.string().optional().default(""),
     })
@@ -440,13 +451,13 @@ export type WorkOrderUpdate = z.infer<typeof WorkOrderUpdateSchema>;
 
 export const WorkOrderStartSchema = z.object({
   pipeline_id: z.string().min(1),
-  /** studio = self-managed orchestrator; dify = legacy Workflow. Legacy "local" → studio. */
+  /** Always Studio orchestrator; legacy "dify"/"local" coerce to studio. */
   executor: z.preprocess(
     (v) => {
-      if (v === "local" || v == null || v === "") return "studio";
+      if (v === "local" || v === "dify" || v == null || v === "") return "studio";
       return v;
     },
-    z.enum(["dify", "studio"]),
+    z.literal("studio"),
   ).optional().default("studio"),
   /** Auto-approve human gates for this run (does not change pipeline definition). */
   auto_approve: z.boolean().optional().default(false),
@@ -465,10 +476,10 @@ export const WorkOrderRestartSchema = z.object({
   pipeline_id: z.string().optional(),
   executor: z.preprocess(
     (v) => {
-      if (v === "local" || v == null || v === "") return "studio";
+      if (v === "local" || v === "dify" || v == null || v === "") return "studio";
       return v;
     },
-    z.enum(["dify", "studio"]),
+    z.literal("studio"),
   ).optional(),
   auto_approve: z.boolean().optional(),
   agents_md_path: z.string().optional(),
@@ -481,7 +492,7 @@ export type WorkOrderRestart = z.infer<typeof WorkOrderRestartSchema>;
 
 export const WorkOrderDecisionSchema = z.object({
   decision: z.enum(["approve", "reject"]).optional(),
-  /** Dify Human Input action id (overrides decision mapping when set) */
+  /** Optional action id (legacy Human Input); overrides decision mapping when set */
   action: z.string().optional(),
   feedback: z.string().optional().default(""),
   inputs: z.record(z.unknown()).optional(),
@@ -501,41 +512,49 @@ export const WorkOrderReworkSchema = z.object({
 });
 export type WorkOrderRework = z.infer<typeof WorkOrderReworkSchema>;
 
-export const ManagerChatMessageSchema = z.object({
+export const AgentChatMessageSchema = z.object({
   id: z.string(),
-  role: z.enum(["user", "manager", "system"]),
+  role: z.enum(["user", "agent", "system"]),
   content: z.string(),
   created_at: z.string(),
-  actions: z.array(z.string()).default([]),
+  agent_id: z.string().optional(),
+  agent_name: z.string().optional(),
+  stage: z.string().optional(),
+  error: z.string().optional(),
 });
-export type ManagerChatMessage = z.infer<typeof ManagerChatMessageSchema>;
+export type AgentChatMessage = z.infer<typeof AgentChatMessageSchema>;
 
-export const ManagerChatThreadSchema = z.object({
+export const AgentChatThreadSchema = z.object({
   work_order_id: z.string(),
-  messages: z.array(ManagerChatMessageSchema).default([]),
+  messages: z.array(AgentChatMessageSchema).default([]),
   updated_at: z.string().optional(),
 });
-export type ManagerChatThread = z.infer<typeof ManagerChatThreadSchema>;
+export type AgentChatThread = z.infer<typeof AgentChatThreadSchema>;
 
-export const ManagerChatPostSchema = z.object({
+export const AgentChatPostSchema = z.object({
   message: z.string().min(1),
 });
-export type ManagerChatPost = z.infer<typeof ManagerChatPostSchema>;
+export type AgentChatPost = z.infer<typeof AgentChatPostSchema>;
+
+/** @deprecated Use AgentChat* — leftover ManagerChat aliases. */
+export const ManagerChatMessageSchema = AgentChatMessageSchema;
+export type ManagerChatMessage = AgentChatMessage;
+export const ManagerChatThreadSchema = AgentChatThreadSchema;
+export type ManagerChatThread = AgentChatThread;
+export const ManagerChatPostSchema = AgentChatPostSchema;
+export type ManagerChatPost = AgentChatPost;
 
 export {
-  DifyConfigSchema,
-  DifyConfigPublicSchema,
-  DifyConfigPublicForTeamSchema,
-  TeamSecretsSchema,
-  TeamSecretsPublicSchema,
+  parseAgentMentions,
+  type MentionAgent,
+  type ParsedMention,
+  type ParseAgentMentionsResult,
+} from "./mentions";
+
+export {
   PipelineDifyBindingSchema,
   PipelineDifyBindingPublicSchema,
   DigitalHumanDifyBindingSchema,
-  type DifyConfig,
-  type DifyConfigPublic,
-  type DifyConfigPublicForTeam,
-  type TeamSecrets,
-  type TeamSecretsPublic,
   type PipelineDifyBinding,
   type PipelineDifyBindingPublic,
   type DigitalHumanDifyBinding,
@@ -619,8 +638,14 @@ export {
 export {
   StudioLanguageSchema,
   StudioConfigSchema,
+  StudioConfigPublicSchema,
+  TeamSecretsSchema,
+  TeamSecretsPublicSchema,
   type StudioLanguage,
   type StudioConfig,
+  type StudioConfigPublic,
+  type TeamSecrets,
+  type TeamSecretsPublic,
 } from "./studio";
 
 export {

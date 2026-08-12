@@ -2,12 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Card,
-  Col,
   Collapse,
   Empty,
   Input,
   List,
-  Row,
   Select,
   Space,
   Steps,
@@ -16,13 +14,14 @@ import {
   Typography,
   message,
 } from "antd";
-import { LinkOutlined, ReloadOutlined } from "@ant-design/icons";
+import { LinkOutlined, ProfileOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { RunLogEntry, RunLogMeta, RunLogSource } from "@agent-studio/agent-schema";
 import { runLogsApi, type RunLogTraceStep } from "../api/run-logs";
 import { AgentOutputView } from "../components/AgentOutputView";
 import { RunArtifactsPanel } from "../components/RunArtifactsPanel";
 import { getSelectedTeam } from "../auth/session";
+import { EmptyRich } from "../components/EmptyRich";
 
 const SOURCE_COLOR: Record<RunLogSource, string> = {
   system: "default",
@@ -39,7 +38,7 @@ const SOURCE_LABEL: Record<RunLogSource, string> = {
   pipeline: "流水线",
   agent: "Agent",
   bridge: "Bridge",
-  dify: "Dify",
+  dify: "编排",
   manager: "总管",
   human: "人工",
 };
@@ -166,7 +165,7 @@ export function RunLogsPage() {
   async function jumpLookup() {
     const needle = q.trim() || initialQ.trim();
     if (!needle) {
-      message.info("先输入 Studio / Dify / Bridge / 工单 ID");
+      message.info("先输入 Studio / Bridge / 工单 ID");
       return;
     }
     try {
@@ -184,39 +183,37 @@ export function RunLogsPage() {
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Space wrap>
-        <Input.Search
-          placeholder="搜索 Studio/Dify/Bridge run、失败原因、工单…"
-          allowClear
-          defaultValue={initialQ}
-          style={{ width: 360 }}
-          onSearch={setQ}
-        />
-        <Button type="primary" onClick={() => void jumpLookup()}>
-          定位运行
-        </Button>
-        <Button icon={<ReloadOutlined />} onClick={() => void reloadList()}>
-          刷新
-        </Button>
-        <Typography.Text type="secondary">共 {total} 次运行</Typography.Text>
-      </Space>
+    <div className="page-shell">
+      <div className="page-toolbar">
+        <div className="page-toolbar-filters">
+          <Input.Search
+            placeholder="搜索 Studio/Bridge run、失败原因、工单…"
+            allowClear
+            defaultValue={initialQ}
+            style={{ width: 320 }}
+            onSearch={setQ}
+          />
+          <span className="page-meta">共 {total} 次</span>
+        </div>
+        <div className="page-toolbar-actions">
+          <Button type="primary" onClick={() => void jumpLookup()}>
+            定位运行
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void reloadList()}>
+            刷新
+          </Button>
+        </div>
+      </div>
 
-      <Row gutter={16}>
-        <Col xs={24} lg={8}>
-          <Card size="small" title="按运行 ID" loading={loading}>
+      <div className="page-split page-split--wide-list">
+        <aside className="pane">
+          <Card size="small" title="按运行 ID" loading={loading} className="pane-card">
             {items.length ? (
               <List
                 dataSource={items}
                 renderItem={(item) => (
                   <List.Item
-                    style={{
-                      cursor: "pointer",
-                      background:
-                        item.run_id === selectedId ? "#f5f5f5" : undefined,
-                      padding: "8px 12px",
-                      borderRadius: 6,
-                    }}
+                    className={`list-item-clickable${item.run_id === selectedId ? " list-item-active" : ""}`}
                     onClick={() => selectRun(item.run_id)}
                   >
                     <List.Item.Meta
@@ -241,7 +238,7 @@ export function RunLogsPage() {
                           {item.dify_workflow_run_id || item.bridge_run_id ? (
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                               {item.dify_workflow_run_id
-                                ? `Dify ${item.dify_workflow_run_id.slice(0, 10)}…`
+                                ? `Run ${item.dify_workflow_run_id.slice(0, 10)}…`
                                 : ""}
                               {item.dify_workflow_run_id && item.bridge_run_id
                                 ? " · "
@@ -264,14 +261,19 @@ export function RunLogsPage() {
                 )}
               />
             ) : (
-              <Empty description="暂无运行日志（启动工单后写入）" />
+              <EmptyRich
+                icon={<ProfileOutlined />}
+                title="暂无运行日志"
+                description="启动工单流水线后，这里会按 run 聚合轨迹。"
+              />
             )}
           </Card>
-        </Col>
+        </aside>
 
-        <Col xs={24} lg={16}>
+        <section className="pane">
           <Card
             size="small"
+            className="pane-card"
             loading={detailLoading}
             title={selected ? `运行 ${selected.run_id}` : "运行详情"}
             extra={
@@ -306,7 +308,11 @@ export function RunLogsPage() {
             }
           >
             {!selected ? (
-              <Empty description="选择左侧一次运行" />
+              <EmptyRich
+                icon={<ProfileOutlined />}
+                title="选择左侧一次运行"
+                description="查看时间线、产物与错误摘要。"
+              />
             ) : (
               <Space direction="vertical" size={12} style={{ width: "100%" }}>
                 <Space wrap>
@@ -341,7 +347,7 @@ export function RunLogsPage() {
                     </Typography.Text>
                     {selected.dify_workflow_run_id ? (
                       <Typography.Text>
-                        Dify{" "}
+                        Legacy{" "}
                         <Typography.Text
                           code
                           copyable
@@ -375,7 +381,7 @@ export function RunLogsPage() {
                 </Space>
 
                 {trace.length ? (
-                  <Card size="small" type="inner" title="运行轨迹（Studio → Dify → Bridge）">
+                  <Card size="small" type="inner" title="运行轨迹（Studio → Bridge）">
                     <Steps
                       size="small"
                       direction="vertical"
@@ -493,8 +499,8 @@ export function RunLogsPage() {
               </Space>
             )}
           </Card>
-        </Col>
-      </Row>
-    </Space>
+        </section>
+      </div>
+    </div>
   );
 }

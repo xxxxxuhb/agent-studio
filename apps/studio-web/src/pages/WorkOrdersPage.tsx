@@ -4,7 +4,6 @@ import {
   Card,
   Col,
   Collapse,
-  Empty,
   Form,
   Input,
   List,
@@ -20,10 +19,10 @@ import {
 import {
   DeleteOutlined,
   EditOutlined,
+  FileTextOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RedoOutlined,
-  SyncOutlined,
   StopOutlined,
 } from "@ant-design/icons";
 import { useSearchParams } from "react-router-dom";
@@ -32,7 +31,7 @@ import { pipelinesApi } from "../api/pipelines";
 import { projectsApi } from "../api/projects";
 import { workOrdersApi } from "../api/work-orders";
 import { getSelectedTeam } from "../auth/session";
-import { ManagerChatPanel } from "../components/ManagerChatPanel";
+import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
 import { WorkOrderRunPanel } from "../components/WorkOrderRunPanel";
 import { STATUS_LABEL, CATEGORY_LABEL, CATEGORY_OPTIONS } from "../work-orders/workOrderLabels";
 import { subscribeWorkOrder } from "../ws/work-orders";
@@ -126,58 +125,6 @@ export function WorkOrdersPage() {
     });
   }, [selectedId]);
 
-  /** Auto-pull Dify pause / form_token while waiting for Human Input. */
-  useEffect(() => {
-    if (!selected) return;
-    if (selected.run?.executor === "studio") return;
-    const dify = selected.run?.dify;
-    const waiting =
-      (selected.status === "pending_approval" || dify?.status === "paused") &&
-      !dify?.form_token;
-    if (!waiting) return;
-
-    let cancelled = false;
-    let attempt = 0;
-    let timer: number | undefined;
-
-    const schedule = (delayMs: number) => {
-      timer = window.setTimeout(() => void tick(), delayMs);
-    };
-
-    const tick = async () => {
-      attempt += 1;
-      try {
-        const updated = await workOrdersApi.syncDify(selected.id);
-        if (cancelled) return;
-        setItems((prev) => {
-          const idx = prev.findIndex((w) => w.id === updated.id);
-          if (idx < 0) return prev;
-          const next = [...prev];
-          next[idx] = updated;
-          return next;
-        });
-        if (updated.run?.dify?.form_token) return;
-      } catch {
-        /* silent — manual sync button still available */
-      }
-      if (cancelled) return;
-      // Back off so we don't hammer Dify alongside the 5s gateway poll.
-      const delay = Math.min(15_000, 4_000 + attempt * 2_000);
-      schedule(delay);
-    };
-
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [
-    selected?.id,
-    selected?.status,
-    selected?.run?.dify?.status,
-    selected?.run?.dify?.form_token,
-  ]);
-
   function openCreate() {
     setEditingId(null);
     form.setFieldsValue({
@@ -263,32 +210,11 @@ export function WorkOrdersPage() {
     }
   }
 
-  async function syncDify() {
-    if (!selected) return;
-    try {
-      const updated = await workOrdersApi.syncDify(selected.id);
-      if (
-        updated.status === "running" &&
-        updated.run?.dify?.status === "failed" &&
-        updated.run.dify.error
-      ) {
-        message.warning("工作流已失败，请修好 Bridge 后点「重新执行」");
-      } else if (updated.status === "running" && updated.run?.dify?.error) {
-        message.warning("同步遇到异常，工单仍在运行中，可稍后重试或「重新执行」");
-      } else {
-        message.success("已同步 Dify 状态");
-      }
-      await reload(updated.id);
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : String(err));
-    }
-  }
-
   async function cancelRun() {
     if (!selected) return;
     Modal.confirm({
       title: "结束当前流水线？",
-      content: "结束后可重新「开始流水线」。会同时请求停掉当前 Dify 工作流。",
+      content: "结束后可重新「开始流水线」。会同时请求停掉当前 Studio 编排。",
       okText: "结束运行",
       okType: "danger",
       onOk: async () => {
@@ -348,7 +274,7 @@ export function WorkOrdersPage() {
         action ? { action } : undefined,
       );
       setFeedback("");
-      message.success(`已提交 Dify 确认（${action || decision}）`);
+      message.success(`已提交确认（${action || decision}）`);
       await reload(updated.id);
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
@@ -356,52 +282,58 @@ export function WorkOrdersPage() {
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Row justify="space-between" align="middle" gutter={[16, 16]}>
-        <Col>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            工单
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            工单即需求；在这里选择流水线并开始执行（共 {total} 条）
-          </Typography.Text>
-        </Col>
-        <Col>
+    <div className="page-shell">
+      <div className="page-toolbar">
+        <div className="page-toolbar-filters">
+          <Input.Search
+            allowClear
+            placeholder="搜索标题 / 需求 / 标签"
+            style={{ width: 260 }}
+            onSearch={setQ}
+            onChange={(e) => {
+              if (!e.target.value) setQ("");
+            }}
+          />
+          <Select
+            value={status}
+            style={{ width: 140 }}
+            onChange={setStatus}
+            options={[
+              { value: "all", label: "全部状态" },
+              ...Object.entries(STATUS_LABEL).map(([value, meta]) => ({
+                value,
+                label: meta.text,
+              })),
+            ]}
+          />
+          <span className="page-meta">{total} 条</span>
+        </div>
+        <div className="page-toolbar-actions">
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建工单
           </Button>
-        </Col>
-      </Row>
-
-      <Space wrap>
-        <Input.Search
-          allowClear
-          placeholder="搜索标题 / 需求 / 标签"
-          style={{ width: 280 }}
-          onSearch={setQ}
-          onChange={(e) => {
-            if (!e.target.value) setQ("");
-          }}
-        />
-        <Select
-          value={status}
-          style={{ width: 160 }}
-          onChange={setStatus}
-          options={[
-            { value: "all", label: "全部状态" },
-            ...Object.entries(STATUS_LABEL).map(([value, meta]) => ({
-              value,
-              label: meta.text,
-            })),
-          ]}
-        />
-      </Space>
+        </div>
+      </div>
 
       <div className={`wo-layout${selected?.run ? " wo-layout--running" : ""}`}>
         <aside className="wo-layout-list">
-          <Card size="small" title="列表" loading={loading} className="wo-layout-card">
+          <Card
+            size="small"
+            title="列表"
+            loading={loading}
+            className="wo-layout-card pane-card"
+          >
             {!items.length ? (
-              <Empty description="暂无工单" />
+              <EmptyRich
+                icon={<FileTextOutlined />}
+                title="还没有工单"
+                description="把需求写成工单，再选流水线启动执行。"
+                action={
+                  <EmptyRichActionButton icon={<PlusOutlined />} onClick={openCreate}>
+                    新建工单
+                  </EmptyRichActionButton>
+                }
+              />
             ) : (
               <List
                 className="wo-order-list"
@@ -444,7 +376,7 @@ export function WorkOrdersPage() {
         <section className="wo-layout-main">
           <Card
             size="small"
-            className="wo-layout-card"
+            className="wo-layout-card pane-card"
             title={selected ? selected.title : "详情"}
             extra={
               selected ? (
@@ -465,11 +397,6 @@ export function WorkOrdersPage() {
                       }}
                     >
                       {selected.status === "queued" ? "调整排队 / 启动" : "开始流水线"}
-                    </Button>
-                  ) : null}
-                  {selected.run?.dify?.workflow_run_id ? (
-                    <Button icon={<SyncOutlined />} onClick={() => void syncDify()}>
-                      同步 Dify
                     </Button>
                   ) : null}
                   {selected.run ? (
@@ -524,7 +451,16 @@ export function WorkOrdersPage() {
             }
           >
             {!selected ? (
-              <Empty description="选择左侧工单，或新建一个需求" />
+              <EmptyRich
+                icon={<FileTextOutlined />}
+                title="选择左侧工单"
+                description="查看需求、启动流水线，或打开运行中的 Agent 聊天与产出。"
+                action={
+                  <EmptyRichActionButton icon={<PlusOutlined />} onClick={openCreate}>
+                    新建工单
+                  </EmptyRichActionButton>
+                }
+              />
             ) : (
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
                 <Space wrap size={[8, 8]}>
@@ -577,13 +513,8 @@ export function WorkOrdersPage() {
                       自动确认：{selected.run.auto_approve ? "开" : "关"}
                     </Tag>
                   ) : null}
-                  {selected.run?.dify?.binding_source ? (
-                    <Tag color="blue">
-                      Dify{" "}
-                      {selected.run.dify.binding_source === "pipeline"
-                        ? "流水线绑定"
-                        : "全局默认"}
-                    </Tag>
+                  {selected.run ? (
+                    <Tag color="blue">Studio 编排</Tag>
                   ) : null}
                 </Space>
 
@@ -614,29 +545,23 @@ export function WorkOrdersPage() {
                       void decide(decision, action, feedbackOverride)
                     }
                     onRestart={() => void restartRun()}
+                    onOrderUpdate={(updated) => {
+                      setItems((prev) =>
+                        prev.map((w) => (w.id === updated.id ? updated : w)),
+                      );
+                    }}
                   />
                 ) : (
-                  <Empty description="尚未启动流水线" />
+                  <EmptyRich
+                    icon={<PlayCircleOutlined />}
+                    title="尚未启动流水线"
+                    description="选好流水线后点「开始」，运行状态与 Agent 产出会出现在这里。"
+                  />
                 )}
               </Space>
             )}
           </Card>
         </section>
-
-        <aside className="wo-layout-chat">
-          {selected ? (
-            <ManagerChatPanel
-              workOrderId={selected.id}
-              onWorkOrderChange={(order) => {
-                setItems((prev) => prev.map((w) => (w.id === order.id ? order : w)));
-              }}
-            />
-          ) : (
-            <Card size="small" title="总管对话" className="wo-layout-card">
-              <Empty description="选择工单后与总管对话" />
-            </Card>
-          )}
-        </aside>
       </div>
 
       <Modal
@@ -737,7 +662,7 @@ export function WorkOrdersPage() {
         cancelButtonProps={{ disabled: startBusy }}
       >
         <Typography.Paragraph type="secondary">
-          将通过 Dify Workflow 执行（需在设置中配置 App Key）。
+          将通过 Studio 编排执行（经 Bridge）。
           若工单绑定了项目，启动前会先确保仓库已克隆，再由总管决定改哪个仓。
         </Typography.Paragraph>
         <Form layout="vertical">
@@ -779,9 +704,7 @@ export function WorkOrdersPage() {
       >
         <Typography.Paragraph type="secondary">
           将结束当前运行（如有），并用上次配置再启：流水线{" "}
-          {selected?.run?.pipeline_id || "-"}
-          {selected?.run?.executor === "dify" ? "（Dify）" : "（Studio 编排）"}
-          。默认复用上次总管选仓（不再重新选仓）。确认后立即返回，阶段在后台执行。
+          {selected?.run?.pipeline_id || "-"}（Studio 编排）。默认复用上次总管选仓（不再重新选仓）。确认后立即返回，阶段在后台执行。
         </Typography.Paragraph>
         <Form layout="vertical">
           <Form.Item
@@ -792,6 +715,6 @@ export function WorkOrdersPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </Space>
+    </div>
   );
 }

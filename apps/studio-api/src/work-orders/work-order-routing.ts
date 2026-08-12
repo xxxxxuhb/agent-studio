@@ -1,16 +1,23 @@
 import { BadRequestException, Logger } from "@nestjs/common";
 import type { WorkOrder, WorkOrderRepoTarget } from "@agent-studio/agent-schema";
 import { bridgeAuthHeaders } from "../bridges/bridge-http";
-import type { DifyConfigService } from "../dify/dify-config.service";
 import type { ProjectsService } from "../projects/projects.service";
 import {
   type ProjectRouting,
   resolveStudioBridgeBase,
-} from "./work-order-dify-utils";
+} from "./work-order-bridge-utils";
+
+/** Minimal config surface used for Bridge URL / AGENTS.md defaults. */
+export type StudioBridgeConfigLike = {
+  getEffectiveForTeam(teamId: string): {
+    agents_md_path?: string;
+    bridge_base_url?: string;
+  };
+};
 
 export type PrepareProjectRoutingDeps = {
   projects: ProjectsService;
-  difyConfig: DifyConfigService;
+  studioConfig: StudioBridgeConfigLike;
   logger: Logger;
   /** Registered online/busy Bridge public URL (preferred over settings). */
   registeredBridgeBaseUrl?: string;
@@ -130,9 +137,8 @@ export async function prepareProjectRouting(
 
   if (!projectId) {
     const tid = (order.team_id || "").trim();
-    const fallbackAgents = tid
-      ? deps.difyConfig.getEffectiveForTeam(tid).agents_md_path
-      : deps.difyConfig.get().agents_md_path;
+    const fallbackAgents =
+      deps.studioConfig.getEffectiveForTeam(tid).agents_md_path;
     const agents = override || fallbackAgents || "auto";
     return {
       agents_md_path: agents,
@@ -156,12 +162,9 @@ export async function prepareProjectRouting(
   const bridgeBase = resolveStudioBridgeBase({
     override: opts.bridgeBaseUrl,
     registeredBaseUrl: deps.registeredBridgeBaseUrl,
-    configured: (() => {
-      const tid = (order.team_id || "").trim();
-      return tid
-        ? deps.difyConfig.getEffectiveForTeam(tid).bridge_base_url
-        : deps.difyConfig.get().bridge_base_url;
-    })(),
+    configured: deps.studioConfig.getEffectiveForTeam(
+      (order.team_id || "").trim(),
+    ).bridge_base_url,
   });
 
   const catalog = await deps.projects.catalogForManager(null, projectId);

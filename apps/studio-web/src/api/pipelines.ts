@@ -46,34 +46,4 @@ export const pipelinesApi = {
       fallback_reason?: string;
     }>("/pipelines/compose", body, { timeout: 130_000 });
   },
-  difyHealth(id: string) {
-    return post<{
-      ok: boolean;
-      binding_source?: string;
-      api_base?: string;
-      app_id?: string;
-      error?: string;
-      parameters?: unknown;
-    }>(`/pipelines/${id}/dify-health`);
-  },
-  getDifyDsl(id: string) {
-    return get<{
-      pipeline_id: string;
-      filename: string;
-      yaml: string;
-      hint: string;
-    }>(`/pipelines/${id}/dify-dsl`);
-  },
-  importDifyDsl(id: string, body?: { overwrite?: boolean }) {
-    return post<{
-      ok: boolean;
-      status: string;
-      app_id: string;
-      import_id: string;
-      published?: boolean;
-      published_version?: string;
-      hint: string;
-      pipeline?: unknown;
-    }>(`/pipelines/${id}/dify-import`, body || {});
-  },
 };

@@ -91,21 +91,34 @@ export class RunLogsService {
     bridge_stage: string;
     last_error: string;
   } {
+    const studio = order.run?.studio;
     const dify = order.run?.dify;
     const lastBridgeStage = [...(order.run?.events || [])]
       .reverse()
       .find((e) => e.type === "bridge_stage" && e.bridge_stage)?.bridge_stage;
-    const err = (dify?.error || "").trim() || (dify?.raw_summary || "").trim();
+    const err =
+      (studio?.error || "").trim() ||
+      (dify?.error || "").trim() ||
+      (dify?.raw_summary || "").trim();
     const lastError =
       order.status === "failed" ||
+      studio?.status === "failed" ||
       dify?.status === "failed" ||
       /失败|error|503|不可达/i.test(err)
         ? err.slice(0, 2000)
-        : (dify?.error || "").trim().slice(0, 2000);
+        : err.slice(0, 2000);
     return {
       dify_workflow_run_id: (dify?.workflow_run_id || "").trim(),
-      bridge_run_id: (dify?.bridge_run_id || "").trim(),
-      bridge_stage: (lastBridgeStage || "").trim(),
+      bridge_run_id: (
+        studio?.bridge_run_id ||
+        dify?.bridge_run_id ||
+        ""
+      ).trim(),
+      bridge_stage: (
+        lastBridgeStage ||
+        studio?.current_stage ||
+        ""
+      ).trim(),
       last_error: lastError,
     };
   }

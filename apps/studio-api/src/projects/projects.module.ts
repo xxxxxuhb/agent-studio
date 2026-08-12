@@ -1,6 +1,6 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { DifyModule } from "../dify/dify.module";
+import { StudioConfigModule } from "../studio-config/studio-config.module";
 import { TeamsModule } from "../teams/teams.module";
 import { ProjectEntity } from "./entities/project.entity";
 import { ProjectsController } from "./projects.controller";
@@ -10,7 +10,7 @@ import { ProjectsService } from "./projects.service";
   imports: [
     TypeOrmModule.forFeature([ProjectEntity]),
     TeamsModule,
-    DifyModule,
+    StudioConfigModule,
   ],
   controllers: [ProjectsController],
   providers: [ProjectsService],

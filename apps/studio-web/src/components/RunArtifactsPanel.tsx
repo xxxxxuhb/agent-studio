@@ -36,7 +36,7 @@ export function RunArtifactsPanel({ runId, bridgeRunId }: Props) {
       const res = await runLogsApi.listArtifacts(runId);
       setItems(res.items || []);
       if (!res.items?.length) {
-        setHint("Bridge 上该 run 暂无产物文件（或尚未写入 docs/dify-runs）。");
+        setHint("Bridge 上该 run 暂无产物文件（或尚未写入 run 产物目录）。");
       }
     } catch (err) {
       setItems([]);
@@ -73,7 +73,7 @@ export function RunArtifactsPanel({ runId, bridgeRunId }: Props) {
         type="info"
         showIcon
         message="尚无 Bridge run"
-        description="流水线执行到 Bridge 阶段并回写 bridge_run_id 后，可在此查看 docs/dify-runs 产物。"
+        description="流水线执行到 Bridge 阶段并回写 bridge_run_id 后，可在此查看 run 产物目录。"
       />
     );
   }

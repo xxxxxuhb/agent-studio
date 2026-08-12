@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { BadRequestException, Logger } from "@nestjs/common";
 import type { WorkOrder } from "@agent-studio/agent-schema";
-import type { DifyConfigService } from "../../dist/dify/dify-config.service";
 import type { ProjectsService } from "../../dist/projects/projects.service";
+import type { StudioBridgeConfigLike } from "../../dist/work-orders/work-order-routing";
 import {
   ensureWorkspaceViaBridge,
   mergeCatalogWithBridgePaths,
@@ -12,7 +12,7 @@ import {
 import {
   resolveStudioBridgeBase,
   studioReachableBridgeBase,
-} from "../../dist/work-orders/work-order-dify-utils";
+} from "../../dist/work-orders/work-order-bridge-utils";
 
 const originalFetch = globalThis.fetch;
 
@@ -203,22 +203,17 @@ describe("prepareProjectRouting", () => {
       }),
     } as unknown as ProjectsService;
 
-    const difyConfig = {
-      get: () => ({
-        agents_md_path: opts?.agents_md_path || "auto",
-        bridge_base_url:
-          opts?.bridge_base_url || "http://host.docker.internal:8787",
-      }),
+    const studioConfig: StudioBridgeConfigLike = {
       getEffectiveForTeam: () => ({
         agents_md_path: opts?.agents_md_path || "auto",
         bridge_base_url:
           opts?.bridge_base_url || "http://host.docker.internal:8787",
       }),
-    } as unknown as DifyConfigService;
+    };
 
     return {
       projects,
-      difyConfig,
+      studioConfig,
       logger: new Logger("test"),
       registeredBridgeBaseUrl: opts?.registered,
     };

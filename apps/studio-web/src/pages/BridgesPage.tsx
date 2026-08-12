@@ -192,48 +192,52 @@ export function BridgesPage() {
   });
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <div className="page-shell">
       {!tokenConfigured ? (
         <Alert
           type="warning"
           showIcon
+          style={{ flex: "0 0 auto" }}
           message="未配置 STUDIO_BRIDGE_TOKEN"
-          description="在 Studio API 环境变量中设置 STUDIO_BRIDGE_TOKEN，执行器才能通过 WS 注册。生成的命令会带占位符。"
+          description="在 Studio API 环境变量中设置 STUDIO_BRIDGE_TOKEN，执行器才能通过 WS 注册。"
         />
       ) : null}
 
-      <Card
-        size="small"
-        title="执行器"
-        extra={
-          <Space>
-            <Tag
-              color={
-                wsStatus === "connected"
-                  ? "success"
-                  : wsStatus === "connecting"
-                    ? "processing"
-                    : "default"
-              }
-            >
-              WS {wsStatus}
-            </Tag>
-            <Button icon={<ReloadOutlined />} onClick={() => void reload()}>
-              刷新
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
-              添加执行器
-            </Button>
-          </Space>
-        }
-      >
-        <Table<BridgeExecutor>
-          rowKey="id"
-          loading={loading}
-          dataSource={items}
-          pagination={false}
-          locale={{ emptyText: "暂无执行器，点右上角添加并复制启动命令" }}
-          columns={[
+      <div className="page-toolbar">
+        <div className="page-toolbar-filters">
+          <Tag
+            color={
+              wsStatus === "connected"
+                ? "success"
+                : wsStatus === "connecting"
+                  ? "processing"
+                  : "default"
+            }
+          >
+            WS {wsStatus}
+          </Tag>
+          <span className="page-meta">{items.length} 台执行器</span>
+        </div>
+        <div className="page-toolbar-actions">
+          <Button icon={<ReloadOutlined />} onClick={() => void reload()}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+            添加执行器
+          </Button>
+        </div>
+      </div>
+
+      <div className="pane" style={{ flex: 1 }}>
+        <Card size="small" className="pane-card" styles={{ body: { padding: 0 } }}>
+          <Table<BridgeExecutor>
+            rowKey="id"
+            loading={loading}
+            dataSource={items}
+            pagination={false}
+            scroll={{ y: "calc(100vh - 220px)" }}
+            locale={{ emptyText: "暂无执行器，点右上角添加并复制启动命令" }}
+            columns={[
             {
               title: "名称",
               dataIndex: "name",
@@ -321,7 +325,8 @@ export function BridgesPage() {
             },
           ]}
         />
-      </Card>
+        </Card>
+      </div>
 
       <Modal
         title="添加执行器"
@@ -463,7 +468,7 @@ export function BridgesPage() {
               name="base_url"
               label="执行器公网/局域网 URL"
               rules={[{ required: true, message: "请输入 public-url" }]}
-              extra="Studio / Dify 回调执行器的地址，对应 --public-url"
+              extra="Studio / Bridge 回调执行器的地址，对应 --public-url"
             >
               <Input placeholder="http://192.168.1.8:8787" />
             </Form.Item>
@@ -514,6 +519,6 @@ export function BridgesPage() {
           </Space>
         )}
       </Modal>
-    </Space>
+    </div>
   );
 }

@@ -1,16 +1,26 @@
+import { useState } from "react";
 import {
   Alert,
   Button,
   Card,
   Collapse,
+  Drawer,
   Empty,
   Input,
+  Modal,
   Space,
   Steps,
   Tag,
   Typography,
 } from "antd";
-import { CheckOutlined, CloseOutlined, ProfileOutlined } from "@ant-design/icons";
+import {
+  CheckOutlined,
+  CloseOutlined,
+  CommentOutlined,
+  ExpandOutlined,
+  ProfileOutlined,
+  AppstoreOutlined,
+} from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import type { WorkOrder, WorkOrderRunStep } from "@agent-studio/agent-schema";
 import { AgentOutputView } from "./AgentOutputView";
@@ -20,7 +30,9 @@ import {
   hasOpenQuestions,
 } from "./ClarificationChecklist";
 import { MarkdownBody } from "./MarkdownBody";
+import { WorkOrderAgentChat } from "./WorkOrderAgentChat";
 import {
+  STATUS_LABEL,
   STEP_STATUS_LABEL,
   STEP_STATUS_MAP,
 } from "../work-orders/workOrderLabels";
@@ -35,9 +47,10 @@ type Props = {
     feedbackOverride?: string,
   ) => void;
   onRestart?: () => void;
+  onOrderUpdate?: (order: WorkOrder) => void;
 };
 
-type DifyAlertInfo = {
+type RunAlertInfo = {
   type: "success" | "info" | "warning" | "error";
   message: string;
   hint: string;
@@ -52,17 +65,18 @@ function formatEventTime(at: string): string {
   }
 }
 
-function describeDifyAlert(
+/** Kept for leftover non-studio / legacy run.dify payloads. */
+export function describeLegacyRunAlert(
   order: WorkOrder,
   dify: NonNullable<NonNullable<WorkOrder["run"]>["dify"]>,
-): DifyAlertInfo {
+): RunAlertInfo {
   const err = (dify.error || "").trim();
   const summary = (dify.raw_summary || "").trim();
   const softHeld = order.status === "running" && Boolean(err);
   const syncFailed =
     softHeld &&
     (err.startsWith("同步失败:") ||
-      /拉取 Dify 状态失败|get run failed|Dify get run/i.test(summary || err));
+      /拉取.*状态失败|get run failed|get run/i.test(summary || err));
   const transientBridge =
     /\b(502|503|504)\b|bridge_busy|econnrefused|fetch failed|不可达|掉线|瞬时/i.test(
       `${err}\n${summary}`,
@@ -71,8 +85,8 @@ function describeDifyAlert(
   if (syncFailed) {
     return {
       type: "warning",
-      message: "Dify 状态同步失败（可重试）",
-      hint: "拉取 workflow run 失败；可稍后点「同步 Dify」重试，或「重新执行」开新一轮。",
+      message: "运行状态同步失败（可重试）",
+      hint: "拉取运行状态失败；可点「重新执行」开新一轮。",
       offerRestart: true,
     };
   }
@@ -80,13 +94,13 @@ function describeDifyAlert(
     return {
       type: transientBridge ? "warning" : "error",
       message: transientBridge
-        ? "Dify 工作流失败（疑似 Bridge/网络瞬时）"
-        : "Dify 工作流失败",
+        ? "编排失败（疑似 Bridge/网络瞬时）"
+        : "编排失败",
       hint: transientBridge
         ? "常见原因：Bridge 未启动、掉线或返回 503。本次 run 已结束，修好后点「重新执行」（可复用选仓）。"
         : err
           ? "本次运行已结束。修好问题后点「重新执行」。"
-          : "本次运行已结束。请查看 Dify 日志后点「重新执行」。",
+          : "本次运行已结束。请查看运行日志后点「重新执行」。",
       offerRestart: true,
     };
   }
@@ -98,239 +112,361 @@ function describeDifyAlert(
         : null;
     return {
       type: "warning",
-      message: `Dify ${dify.status || "paused"}`,
+      message: `等待确认 · ${dify.status || "paused"}`,
       hint: order.run?.auto_approve
         ? "已开自动确认：Studio 将代为通过门禁"
         : dify.form_token
-          ? "Human Input 可在下方 Studio 确认"
-          : recoverHint ||
-            "正在自动同步 form_token（也可手动点「同步 Dify」）；Human Input 须为 Web App 投递",
+          ? "人工确认可在下方 Studio 完成"
+          : recoverHint || "正在同步门禁表单；请检查 Bridge",
     };
   }
   return {
     type: "info",
-    message: `Dify ${dify.status || "unknown"}`,
+    message: `运行状态 · ${dify.status || "unknown"}`,
     hint: dify.form_token
-      ? "Human Input 可在下方 Studio 确认"
-      : "正在自动同步 form_token（也可手动点「同步 Dify」）",
+      ? "人工确认可在下方 Studio 完成"
+      : "正在同步门禁表单",
   };
 }
 
-/** Run timeline + agent outputs + human/Dify approval block for a work order. */
-export function WorkOrderRunPanel({
+function bannerTitle(
+  order: WorkOrder,
+  currentStep: WorkOrderRunStep | undefined,
+): string {
+  switch (order.status) {
+    case "queued":
+      return "排队等待空闲 Bridge";
+    case "running":
+      if (!currentStep || currentStep.status === "pending") {
+        return "正在启动流水线";
+      }
+      return `正在执行：${currentStep.label || currentStep.step_id}`;
+    case "pending_approval":
+      return currentStep
+        ? `等待确认：${currentStep.label || currentStep.step_id}`
+        : "等待人工确认";
+    case "completed":
+      return "流水线已完成";
+    case "failed":
+      return "流水线失败";
+    case "rejected":
+      return "已驳回";
+    default:
+      return `状态 · ${order.status}`;
+  }
+}
+
+/** Run timeline + agent outputs + human approval block for a work order. */
+export function WorkOrderRunPanel(props: Props) {
+  if (!props.order.run) {
+    return <Empty description="尚未启动流水线" />;
+  }
+  return <WorkOrderRunPanelBody {...props} />;
+}
+
+function WorkOrderRunPanelBody({
   order,
   feedback,
   onFeedbackChange,
   onDecide,
   onRestart,
+  onOrderUpdate,
 }: Props) {
-  const run = order.run;
-  if (!run) {
-    return <Empty description="尚未启动流水线" />;
-  }
+  const [chatOpen, setChatOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [outputOpen, setOutputOpen] = useState(false);
+  const run = order.run!;
 
+  const isStudio = run.executor === "studio" || !run.executor;
+  const studio = run.studio;
   const currentStep = run.steps[run.current_step_index] as
     | WorkOrderRunStep
     | undefined;
   const autoApprove = Boolean(run.auto_approve);
-  const humanGates = run.steps.filter((s) => s.human_approval).length;
-
-  const difyAlert =
-    run.executor !== "studio" && run.dify
-      ? describeDifyAlert(order, run.dify)
-      : null;
   const events = run.events || [];
-  const queueNote =
-    order.status === "queued"
+  const latestEvent = events.length ? events[events.length - 1] : undefined;
+  const recentEvents = [...events].reverse().slice(0, 40);
+  const bridgeRunId =
+    studio?.bridge_run_id || run.dify?.bridge_run_id || undefined;
+
+  const detailText =
+    (studio?.error || "").trim() ||
+    (currentStep?.summary || "").trim() ||
+    (studio?.last_summary || "").trim() ||
+    (latestEvent?.message || "").trim() ||
+    (order.status === "queued"
       ? run.pending_start?.note ||
         "团队 Bridge 忙碌，工单排队中；空闲后将自动启动。"
-      : "";
-  const dryRun =
-    Boolean(run.dify?.bridge_dry_run) ||
-    Boolean(run.studio?.dry_run) ||
-    events.some((e) => e.dry_run) ||
-    run.steps.some((s) => /\[dry-run\]|CURSOR_API_KEY missing/i.test(s.output || ""));
+      : "");
 
-  const startedLabel = (() => {
-    try {
-      return new Date(run.started_at).toLocaleString();
-    } catch {
-      return run.started_at;
-    }
-  })();
+  const outputStep =
+    [...run.steps].reverse().find((s) => s.output?.trim()) || currentStep;
+  const stepIndex = Math.min(run.current_step_index + 1, run.steps.length || 1);
+  const stepTotal = run.steps.length || 0;
+  const stage = (studio?.current_stage || "").trim();
+  const dryRun =
+    Boolean(studio?.dry_run) ||
+    Boolean(run.dify?.bridge_dry_run) ||
+    events.some((e) => e.dry_run) ||
+    run.steps.some((s) =>
+      /\[dry-run\]|CURSOR_API_KEY missing/i.test(s.output || ""),
+    );
+
+  const moreItems = [
+    ...(run.repo_targets?.length || run.selected_repo_ids?.length
+      ? [
+          {
+            key: "repos",
+            label: "改仓计划",
+            children: (
+              <>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                  {run.repo_targets?.length
+                    ? `按序执行：${run.repo_targets.map((t) => t.repo_id).join(" → ")}`
+                    : `选仓：${(run.selected_repo_ids || []).join(", ")}`}
+                </Typography.Paragraph>
+                {run.manager_routing_reason ? (
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                    {run.manager_routing_reason}
+                  </Typography.Paragraph>
+                ) : null}
+                {run.repo_targets?.length ? (
+                  <Steps
+                    size="small"
+                    direction="vertical"
+                    current={run.current_repo_index ?? 0}
+                    items={run.repo_targets.map((t, i) => ({
+                      title: `${i + 1}. ${t.repo_id}${t.name ? ` · ${t.name}` : ""}`,
+                      description: (
+                        <Space direction="vertical" size={0}>
+                          <Typography.Text type="secondary">
+                            {t.role || "unknown"} · {t.status}
+                          </Typography.Text>
+                          {t.agents_md_path ? (
+                            <Typography.Text code copyable style={{ fontSize: 12 }}>
+                              {t.agents_md_path}
+                            </Typography.Text>
+                          ) : null}
+                        </Space>
+                      ),
+                      status:
+                        t.status === "completed"
+                          ? "finish"
+                          : t.status === "failed"
+                            ? "error"
+                            : t.status === "running"
+                              ? "process"
+                              : "wait",
+                    }))}
+                  />
+                ) : run.selected_agents_md_path ? (
+                  <Typography.Text code copyable>
+                    {run.selected_agents_md_path}
+                  </Typography.Text>
+                ) : null}
+              </>
+            ),
+          },
+        ]
+      : []),
+    {
+      key: "artifacts",
+      label: "Bridge 产物",
+      children: (
+        <RunArtifactsPanel
+          runId={run.run_id}
+          bridgeRunId={bridgeRunId}
+        />
+      ),
+    },
+    {
+      key: "all-outputs",
+      label: "全部 Agent 产出",
+      children: run.steps.some((s) => s.output) ? (
+        <Collapse
+          accordion={false}
+          defaultActiveKey={run.steps
+            .map((s, i) => (s.output ? String(i) : ""))
+            .filter(Boolean)
+            .slice(-1)}
+          items={run.steps.flatMap((s, i) =>
+            s.output
+              ? [
+                  {
+                    key: String(i),
+                    label: (
+                      <Space wrap>
+                        <span>{s.output_title || s.label || s.step_id}</span>
+                        <Tag>{s.agent}</Tag>
+                        <Tag color={STEP_STATUS_LABEL[s.status]?.color || "default"}>
+                          {STEP_STATUS_LABEL[s.status]?.text || s.status}
+                        </Tag>
+                      </Space>
+                    ),
+                    children: <AgentOutputView output={s.output} />,
+                  },
+                ]
+              : [],
+          )}
+        />
+      ) : (
+        <Empty description="尚无 Agent 产出" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ),
+    },
+    {
+      key: "ids",
+      label: "关联 ID",
+      children: (
+        <Space size={4} wrap>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Studio
+          </Typography.Text>
+          <Typography.Text code copyable={{ text: run.run_id }} style={{ fontSize: 12 }}>
+            {run.run_id}
+          </Typography.Text>
+          <Link to={`/logs/${run.run_id}`}>
+            <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
+              日志
+            </Button>
+          </Link>
+          {bridgeRunId ? (
+            <>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Bridge
+              </Typography.Text>
+              <Typography.Text
+                code
+                copyable={{ text: bridgeRunId }}
+                style={{ fontSize: 12 }}
+              >
+                {bridgeRunId}
+              </Typography.Text>
+              <Link to={`/logs?q=${encodeURIComponent(bridgeRunId)}`}>
+                <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
+                  检索
+                </Button>
+              </Link>
+            </>
+          ) : null}
+          {!isStudio && run.dify?.workflow_run_id ? (
+            <>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Legacy run
+              </Typography.Text>
+              <Typography.Text
+                code
+                copyable={{ text: run.dify.workflow_run_id }}
+                style={{ fontSize: 12 }}
+              >
+                {run.dify.workflow_run_id.length > 14
+                  ? `${run.dify.workflow_run_id.slice(0, 12)}…`
+                  : run.dify.workflow_run_id}
+              </Typography.Text>
+            </>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <div className="wo-run-panel">
-      <div className="wo-run-header">
-        <div className="wo-run-header-main">
-          <Typography.Title level={5} className="wo-run-title">
-            执行面板
+      <div className="wo-run-now">
+        <div className="wo-run-now-top">
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            {bannerTitle(order, currentStep)}
           </Typography.Title>
-          <Typography.Text type="secondary" className="wo-run-subtitle">
-            {run.pipeline_name}
-            <span className="wo-run-sep">·</span>
-            <Typography.Text code copyable={{ text: run.run_id }}>
-              {run.run_id}
-            </Typography.Text>
-            <span className="wo-run-sep">·</span>
-            启动于 {startedLabel}
-          </Typography.Text>
-        </div>
-        <Link to={`/logs/${run.run_id}`}>
-          <Button size="small" icon={<ProfileOutlined />}>
-            完整日志
-          </Button>
-        </Link>
-      </div>
-
-      {queueNote ? (
-        <Alert
-          type="info"
-          showIcon
-          message="排队等待空闲 Bridge"
-          description={queueNote}
-          style={{ marginBottom: 12 }}
-        />
-      ) : null}
-
-      <Collapse
-        className="wo-run-block"
-        items={[
-          {
-            key: "artifacts",
-            label: "Bridge 产物（docs/dify-runs）",
-            children: (
-              <RunArtifactsPanel
-                runId={run.run_id}
-                bridgeRunId={run.dify?.bridge_run_id}
-              />
-            ),
-          },
-        ]}
-      />
-
-      <div className="wo-run-meta">
-        <div className="wo-run-meta-item">
-          <span className="wo-run-meta-label">执行器</span>
-          <Tag color="cyan">Dify Workflow</Tag>
-        </div>
-        <div className="wo-run-meta-item wo-run-meta-emphasis">
-          <span className="wo-run-meta-label">自动确认</span>
-          <Tag color={autoApprove ? "success" : "default"}>
-            {autoApprove ? "已开启" : "未开启"}
-          </Tag>
-          <Typography.Text type="secondary" className="wo-run-meta-hint">
-            {autoApprove
-              ? "门禁由 Studio 代为通过（流水线节点仍保留）"
-              : "遇人工确认需手动点通过"}
-          </Typography.Text>
-        </div>
-        <div className="wo-run-meta-item">
-          <span className="wo-run-meta-label">人工门禁</span>
-          <Tag>
-            {humanGates}/{run.steps.length} 步
-          </Tag>
-        </div>
-        <div className="wo-run-meta-item">
-          <span className="wo-run-meta-label">关联 ID</span>
-          <Space size={4} wrap>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Studio
-            </Typography.Text>
-            <Typography.Text code copyable={{ text: run.run_id }} style={{ fontSize: 12 }}>
-              {run.run_id}
-            </Typography.Text>
+          <Space wrap size={6}>
+            <Button
+              size="small"
+              icon={<CommentOutlined />}
+              onClick={() => setChatOpen(true)}
+            >
+              Agent 聊天
+            </Button>
+            <Button
+              size="small"
+              icon={<ExpandOutlined />}
+              onClick={() => setOutputOpen(true)}
+            >
+              全屏产出
+            </Button>
+            <Button
+              size="small"
+              icon={<AppstoreOutlined />}
+              onClick={() => setMoreOpen(true)}
+            >
+              更多详情
+            </Button>
             <Link to={`/logs/${run.run_id}`}>
-              <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
-                日志
+              <Button size="small" icon={<ProfileOutlined />}>
+                完整日志
               </Button>
             </Link>
-            {run.dify?.workflow_run_id ? (
-              <>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Dify
-                </Typography.Text>
-                <Typography.Text
-                  code
-                  copyable={{ text: run.dify.workflow_run_id }}
-                  style={{ fontSize: 12 }}
-                >
-                  {run.dify.workflow_run_id.length > 14
-                    ? `${run.dify.workflow_run_id.slice(0, 12)}…`
-                    : run.dify.workflow_run_id}
-                </Typography.Text>
-                <Link
-                  to={`/logs?q=${encodeURIComponent(run.dify.workflow_run_id)}`}
-                >
-                  <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
-                    检索
-                  </Button>
-                </Link>
-              </>
-            ) : null}
-            {run.studio?.bridge_run_id ? (
-              <>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Bridge
-                </Typography.Text>
-                <Typography.Text
-                  code
-                  copyable={{ text: run.studio.bridge_run_id }}
-                  style={{ fontSize: 12 }}
-                >
-                  {run.studio.bridge_run_id}
-                </Typography.Text>
-                <Link
-                  to={`/logs?q=${encodeURIComponent(run.studio.bridge_run_id)}`}
-                >
-                  <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
-                    检索
-                  </Button>
-                </Link>
-              </>
-            ) : null}
-            {run.dify?.bridge_run_id ? (
-              <>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Bridge
-                </Typography.Text>
-                <Typography.Text
-                  code
-                  copyable={{ text: run.dify.bridge_run_id }}
-                  style={{ fontSize: 12 }}
-                >
-                  {run.dify.bridge_run_id}
-                </Typography.Text>
-                <Link
-                  to={`/logs?q=${encodeURIComponent(run.dify.bridge_run_id)}`}
-                >
-                  <Button size="small" type="link" style={{ paddingInline: 4, fontSize: 12 }}>
-                    检索
-                  </Button>
-                </Link>
-              </>
-            ) : null}
           </Space>
         </div>
-        {currentStep ? (
-          <div className="wo-run-meta-item">
-            <span className="wo-run-meta-label">当前步骤</span>
-            <Tag color={STEP_STATUS_LABEL[currentStep.status]?.color || "processing"}>
-              {currentStep.label || currentStep.step_id}
+
+        {detailText ? (
+          <Typography.Paragraph type="secondary" className="wo-run-now-detail">
+            {detailText}
+          </Typography.Paragraph>
+        ) : null}
+
+        <div className="wo-run-now-meta">
+          <Tag color={STATUS_LABEL[order.status]?.color || "processing"}>
+            {STATUS_LABEL[order.status]?.text || order.status}
+          </Tag>
+          <Tag color="cyan">Studio 编排</Tag>
+          {stepTotal > 0 ? (
+            <Tag>
+              步骤 {stepIndex}/{stepTotal}
             </Tag>
+          ) : null}
+          {stage ? <Tag color="green">{stage}</Tag> : null}
+          <Tag color={autoApprove ? "success" : "default"}>
+            自动确认：{autoApprove ? "开" : "关"}
+          </Tag>
+          {bridgeRunId ? (
+            <Tag>
+              Bridge{" "}
+              <Typography.Text code copyable={{ text: bridgeRunId }} style={{ fontSize: 12 }}>
+                {bridgeRunId.length > 16 ? `${bridgeRunId.slice(0, 14)}…` : bridgeRunId}
+              </Typography.Text>
+            </Tag>
+          ) : null}
+        </div>
+
+        {order.status === "failed" && onRestart ||
+        order.status === "pending_approval" ? (
+          <div className="wo-run-now-actions">
+            {order.status === "failed" && onRestart ? (
+              <Button size="small" type="primary" onClick={onRestart}>
+                重新执行
+              </Button>
+            ) : null}
+            {order.status === "pending_approval" ? (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  onClick={() => onDecide("approve")}
+                >
+                  通过
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseOutlined />}
+                  onClick={() => onDecide("reject")}
+                >
+                  驳回
+                </Button>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>
-
-      {autoApprove && order.status === "pending_approval" ? (
-        <Alert
-          className="wo-run-block"
-          type="info"
-          showIcon
-          message="自动确认已开启"
-          description="正在等待门禁表单就绪后由 Studio 代为提交通过；若长时间停在此状态，可点「同步 Dify」或检查 Bridge。"
-        />
-      ) : null}
 
       {dryRun ? (
         <Alert
@@ -339,112 +475,6 @@ export function WorkOrderRunPanel({
           showIcon
           message="历史运行含 dry-run 痕迹"
           description="该模式已移除。请用真实 Agent（cursor / trae / qoder）重新执行。"
-        />
-      ) : null}
-
-      {run.repo_targets?.length || run.selected_repo_ids?.length ? (
-        <Card size="small" className="wo-run-section" title="改仓计划">
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            {run.repo_targets?.length
-              ? `按序执行：${run.repo_targets.map((t) => t.repo_id).join(" → ")}`
-              : `选仓：${(run.selected_repo_ids || []).join(", ")}`}
-          </Typography.Paragraph>
-          {run.manager_routing_reason ? (
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              {run.manager_routing_reason}
-            </Typography.Paragraph>
-          ) : null}
-          {run.repo_targets?.length ? (
-            <Steps
-              size="small"
-              direction="vertical"
-              current={run.current_repo_index ?? 0}
-              items={run.repo_targets.map((t, i) => ({
-                title: `${i + 1}. ${t.repo_id}${t.name ? ` · ${t.name}` : ""}`,
-                description: (
-                  <Space direction="vertical" size={0}>
-                    <Typography.Text type="secondary">
-                      {t.role || "unknown"} · {t.status}
-                    </Typography.Text>
-                    {t.agents_md_path ? (
-                      <Typography.Text code copyable style={{ fontSize: 12 }}>
-                        {t.agents_md_path}
-                      </Typography.Text>
-                    ) : null}
-                  </Space>
-                ),
-                status:
-                  t.status === "completed"
-                    ? "finish"
-                    : t.status === "failed"
-                      ? "error"
-                      : t.status === "running"
-                        ? "process"
-                        : "wait",
-              }))}
-            />
-          ) : run.selected_agents_md_path ? (
-            <Typography.Text code copyable>
-              {run.selected_agents_md_path}
-            </Typography.Text>
-          ) : null}
-        </Card>
-      ) : null}
-
-      {run.dify && difyAlert ? (
-        <Alert
-          className="wo-run-block"
-          type={difyAlert.type}
-          showIcon
-          message={difyAlert.message}
-          action={
-            difyAlert.offerRestart && onRestart ? (
-              <Button size="small" type="primary" onClick={onRestart}>
-                重新执行
-              </Button>
-            ) : undefined
-          }
-          description={
-            <Space direction="vertical" size={0}>
-              <Typography.Text type="secondary">
-                Dify{" "}
-                <Typography.Text code copyable>
-                  {run.dify.workflow_run_id || "-"}
-                </Typography.Text>
-                {run.dify.bridge_run_id ? (
-                  <>
-                    {" · "}Bridge{" "}
-                    <Typography.Text code copyable>
-                      {run.dify.bridge_run_id}
-                    </Typography.Text>
-                  </>
-                ) : null}
-                {run.dify.last_synced_at
-                  ? ` · synced ${run.dify.last_synced_at}`
-                  : ""}
-              </Typography.Text>
-              {run.dify.raw_summary && !run.dify.error ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {run.dify.raw_summary.slice(0, 240)}
-                  {run.dify.raw_summary.length > 240 ? "…" : ""}
-                </Typography.Text>
-              ) : null}
-              {run.dify.error ? (
-                <Typography.Text
-                  type={
-                    difyAlert.type === "error"
-                      ? "danger"
-                      : difyAlert.type === "warning"
-                        ? "warning"
-                        : undefined
-                  }
-                >
-                  {run.dify.error}
-                </Typography.Text>
-              ) : null}
-              <Typography.Text type="secondary">{difyAlert.hint}</Typography.Text>
-            </Space>
-          }
         />
       ) : null}
 
@@ -522,118 +552,77 @@ export function WorkOrderRunPanel({
         />
       </Card>
 
-      <Collapse
-        className="wo-run-section wo-run-log-section"
-        defaultActiveKey={["run-logs"]}
-        items={[
-          {
-            key: "run-logs",
-            label: (
-              <Space wrap size={8}>
-                <span>运行日志</span>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {events.length} 条
-                </Typography.Text>
-              </Space>
-            ),
-            children: (
-              <>
-                {events.length ? (
-                  <Collapse
-                    className="wo-run-log-collapse"
-                    defaultActiveKey={[]}
-                    items={[...events]
-                      .reverse()
-                      .slice(0, 40)
-                      .map((e, idx) => ({
-                        key: e.id || `${e.at}-${idx}`,
-                        label: (
-                          <div className="wo-run-log-item">
-                            <div className="wo-run-log-meta">
-                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                {formatEventTime(e.at)}
-                              </Typography.Text>
-                              <Tag>{e.type}</Tag>
-                              {e.bridge_stage ? (
-                                <Tag color="green">{e.bridge_stage}</Tag>
-                              ) : null}
-                              {e.dry_run ? <Tag color="orange">dry-run</Tag> : null}
-                              {e.action ? <Tag color="blue">{e.action}</Tag> : null}
-                              {e.step_id || e.agent ? (
-                                <Typography.Text
-                                  type="secondary"
-                                  style={{ fontSize: 12 }}
-                                >
-                                  {[e.step_id, e.agent].filter(Boolean).join(" · ")}
-                                </Typography.Text>
-                              ) : null}
-                            </div>
-                            <Typography.Text className="wo-run-log-msg wo-run-log-msg-preview">
-                              {e.message.replace(/\s+/g, " ").trim().slice(0, 140)}
-                              {e.message.replace(/\s+/g, " ").trim().length > 140
-                                ? "…"
-                                : ""}
-                            </Typography.Text>
-                          </div>
-                        ),
-                        children: (
-                          <Typography.Paragraph
-                            className="wo-run-log-msg"
-                            style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
-                          >
-                            {e.message}
-                          </Typography.Paragraph>
-                        ),
-                      }))}
-                  />
-                ) : (
-                  <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                    尚无结构化日志。可点右上角「完整日志」按 run_id 查看。
-                  </Typography.Paragraph>
-                )}
-                {events.length > 40 ? (
+      <div className="wo-run-live">
+        <Card size="small" className="wo-run-section" title="实时动态">
+          {recentEvents.length ? (
+            <div className="wo-run-live-scroll">
+              {recentEvents.map((e, idx) => (
+                <div className="wo-run-live-row" key={e.id || `${e.at}-${idx}`}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    仅展示最近 40 条，完整记录见「完整日志」。
+                    {formatEventTime(e.at)}
                   </Typography.Text>
-                ) : null}
-              </>
-            ),
-          },
-        ]}
-      />
+                  <div>
+                    <Space wrap size={4} style={{ marginBottom: 4 }}>
+                      <Tag>{e.type}</Tag>
+                      {e.bridge_stage ? <Tag color="green">{e.bridge_stage}</Tag> : null}
+                      {e.dry_run ? <Tag color="orange">dry-run</Tag> : null}
+                    </Space>
+                    <Typography.Paragraph
+                      style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
+                    >
+                      {e.message}
+                    </Typography.Paragraph>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              尚无结构化日志。可点「完整日志」按 run_id 查看。
+            </Typography.Paragraph>
+          )}
+        </Card>
 
-      <Card size="small" className="wo-run-section" title="Agent 产出">
-        {run.steps.some((s) => s.output) ? (
-          <Collapse
-            accordion={false}
-            defaultActiveKey={run.steps
-              .map((s, i) => (s.output ? String(i) : ""))
-              .filter(Boolean)
-              .slice(-1)}
-            items={run.steps.flatMap((s, i) =>
-              s.output
-                ? [
-                    {
-                      key: String(i),
-                      label: (
-                        <Space wrap>
-                          <span>{s.output_title || s.label || s.step_id}</span>
-                          <Tag>{s.agent}</Tag>
-                          <Tag color={STEP_STATUS_LABEL[s.status]?.color || "default"}>
-                            {STEP_STATUS_LABEL[s.status]?.text || s.status}
-                          </Tag>
-                        </Space>
-                      ),
-                      children: <AgentOutputView output={s.output} />,
-                    },
-                  ]
-                : [],
-            )}
-          />
-        ) : (
-          <Empty description="尚无 Agent 产出" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        )}
-      </Card>
+        <Card
+          size="small"
+          className="wo-run-section"
+          title={
+            outputStep?.output
+              ? `当前产出 · ${outputStep.output_title || outputStep.label || outputStep.step_id}`
+              : "当前产出"
+          }
+          extra={
+            <Button
+              type="link"
+              size="small"
+              icon={<ExpandOutlined />}
+              disabled={!outputStep?.output?.trim()}
+              onClick={() => setOutputOpen(true)}
+            >
+              全屏
+            </Button>
+          }
+        >
+          {outputStep?.output?.trim() ? (
+            <div
+              className="wo-run-live-scroll"
+              role="button"
+              tabIndex={0}
+              onDoubleClick={() => setOutputOpen(true)}
+              title="双击全屏查看"
+            >
+              <AgentOutputView output={outputStep.output} maxHeight={280} />
+            </div>
+          ) : order.status === "running" || order.status === "queued" ? (
+            <Empty
+              description="运行中，产出稍后出现"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          ) : (
+            <Empty description="尚无产出" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          )}
+        </Card>
+      </div>
 
       {order.status === "pending_approval" && currentStep ? (
         <ApprovalCard
@@ -644,6 +633,51 @@ export function WorkOrderRunPanel({
           onDecide={onDecide}
         />
       ) : null}
+
+      <Drawer
+        title="Agent 聊天"
+        placement="right"
+        width={480}
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        destroyOnClose={false}
+        className="wo-chat-drawer"
+        styles={{ body: { display: "flex", flexDirection: "column", overflow: "hidden" } }}
+      >
+        <WorkOrderAgentChat fill order={order} onOrderUpdate={onOrderUpdate} />
+      </Drawer>
+
+      <Modal
+        title="更多详情"
+        open={moreOpen}
+        onCancel={() => setMoreOpen(false)}
+        footer={null}
+        width={820}
+        destroyOnHidden
+      >
+        <Collapse accordion={false} defaultActiveKey={["artifacts", "all-outputs"]} items={moreItems} />
+      </Modal>
+
+      <Modal
+        title={
+          outputStep?.output
+            ? outputStep.output_title || outputStep.label || "Agent 产出"
+            : "Agent 产出"
+        }
+        open={outputOpen}
+        onCancel={() => setOutputOpen(false)}
+        footer={null}
+        width="92vw"
+        style={{ top: 16 }}
+        className="wo-fullscreen-modal"
+        destroyOnHidden
+      >
+        {outputStep?.output ? (
+          <AgentOutputView output={outputStep.output} />
+        ) : (
+          <Empty description="尚无产出" />
+        )}
+      </Modal>
     </div>
   );
 }
@@ -666,15 +700,15 @@ function ApprovalCard({
   ) => void;
 }) {
   const run = order.run!;
-  const dify = run.dify;
   const studio = run.studio;
-  const isStudio = run.executor === "studio";
+  const dify = run.dify;
+  const isStudio = run.executor === "studio" || !run.executor;
   const canDecide = isStudio || Boolean(dify?.form_token);
   const autoApprove = Boolean(run.auto_approve);
   const oqSources = [
-    dify?.form_content,
     currentStep.output,
     studio?.last_summary,
+    dify?.form_content,
     ...run.steps.map((s) => s.output),
   ];
   const showChecklist = hasOpenQuestions(oqSources);
@@ -686,11 +720,9 @@ function ApprovalCard({
       title={
         <Space wrap>
           <span>
-            {isStudio
-              ? studio?.current_stage
-                ? `人工确认 · ${studio.current_stage}`
-                : "Studio 人工确认"
-              : dify?.form_node_title || "Dify 人工确认"}
+            {studio?.current_stage
+              ? `人工确认 · ${studio.current_stage}`
+              : dify?.form_node_title || "Studio 人工确认"}
           </span>
           <Tag color={autoApprove ? "success" : "warning"}>
             自动确认：{autoApprove ? "已开启" : "未开启"}
@@ -705,11 +737,7 @@ function ApprovalCard({
           showIcon
           style={{ marginBottom: 12 }}
           message="本轮已开自动确认"
-          description={
-            isStudio
-              ? "通常无需手动操作；若未自动通过，可在下方手动提交。"
-              : "通常无需手动操作；若未自动通过，可在下方手动提交，或点「同步 Dify」。"
-          }
+          description="通常无需手动操作；若未自动通过，可在下方手动提交。"
         />
       ) : null}
 
@@ -725,12 +753,8 @@ function ApprovalCard({
         />
       ) : null}
 
-      {dify?.form_content && !showChecklist ? (
-        <MarkdownBody content={dify.form_content} />
-      ) : null}
-
-      {isStudio && studio?.last_summary && !showChecklist ? (
-        <MarkdownBody content={studio.last_summary} />
+      {!showChecklist && (studio?.last_summary || dify?.form_content) ? (
+        <MarkdownBody content={studio?.last_summary || dify?.form_content || ""} />
       ) : null}
 
       {!showChecklist ? (
@@ -748,33 +772,11 @@ function ApprovalCard({
         </Typography.Paragraph>
       ) : null}
 
-      {!isStudio && !dify?.form_token ? (
-        <Alert
-          type={
-            /失败|过期|Web App/i.test(dify?.raw_summary || "")
-              ? "warning"
-              : "info"
-          }
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="正在自动拉取门禁表单…"
-          description={
-            dify?.raw_summary?.trim()
-              ? dify.raw_summary
-              : "Studio 会定时同步 Dify；拿到 form_token 后即可通过/驳回。也可手动点「同步 Dify」。"
-          }
-        />
-      ) : null}
-
       {!showChecklist ? (
         <>
           <Input.TextArea
             rows={2}
-            placeholder={
-              isStudio
-                ? "可选反馈（写入 Bridge decision）"
-                : "可选反馈（会写入 Dify 表单对应字段）"
-            }
+            placeholder="可选反馈（写入 Bridge decision）"
             value={feedback}
             onChange={(e) => onFeedbackChange(e.target.value)}
             style={{ marginBottom: 12 }}
@@ -825,28 +827,6 @@ function ApprovalCard({
             )}
           </Space>
         </>
-      ) : !isStudio && dify?.form_actions?.length ? (
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
-          也可使用 Dify 原始按钮：
-          <Space wrap style={{ marginLeft: 8 }}>
-            {dify.form_actions.map((a) => {
-              const rejectish = /reject|驳回|拒绝/i.test(a.id + (a.title || ""));
-              return (
-                <Button
-                  key={a.id}
-                  size="small"
-                  danger={rejectish}
-                  disabled={!canDecide}
-                  onClick={() =>
-                    onDecide(rejectish ? "reject" : "approve", a.id)
-                  }
-                >
-                  {a.title || a.id}
-                </Button>
-              );
-            })}
-          </Space>
-        </Typography.Paragraph>
       ) : null}
     </Card>
   );

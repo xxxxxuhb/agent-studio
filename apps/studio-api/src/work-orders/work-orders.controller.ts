@@ -11,14 +11,12 @@ import {
 } from "@nestjs/common";
 import type { WorkOrderCreate, WorkOrderUpdate } from "@agent-studio/agent-schema";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
-import { ManagerChatService } from "./manager-chat.service";
 import { WorkOrdersService } from "./work-orders.service";
 
 @Controller()
 export class WorkOrdersController {
   constructor(
     @Inject(WorkOrdersService) private readonly workOrders: WorkOrdersService,
-    @Inject(ManagerChatService) private readonly managerChat: ManagerChatService,
   ) {}
 
   @Get("work-orders")
@@ -34,22 +32,6 @@ export class WorkOrdersController {
       team_id,
     });
     return { items, total: items.length };
-  }
-
-  @Get("work-orders/:id/chat")
-  async getChat(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    await this.workOrders.getForUser(user.id, id);
-    return this.managerChat.getThread(id);
-  }
-
-  @Post("work-orders/:id/chat")
-  async postChat(
-    @CurrentUser() user: RequestUser,
-    @Param("id") id: string,
-    @Body() body: unknown,
-  ) {
-    await this.workOrders.requireWritableWorkOrder(user.id, id);
-    return this.managerChat.chat(id, body);
   }
 
   @Get("work-orders/:id")
@@ -94,11 +76,6 @@ export class WorkOrdersController {
     return this.workOrders.restartForUser(user.id, id, body);
   }
 
-  @Post("work-orders/:id/sync-dify")
-  syncDify(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    return this.workOrders.syncDifyForUser(user.id, id);
-  }
-
   @Post("work-orders/:id/run-step")
   async runStep(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     await this.workOrders.requireWritableWorkOrder(user.id, id);
@@ -134,6 +111,20 @@ export class WorkOrdersController {
     @Body() body: { note?: string },
   ) {
     return this.workOrders.clarifyForUser(user.id, id, body?.note || "");
+  }
+
+  @Get("work-orders/:id/agent-chat")
+  getAgentChat(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.workOrders.getAgentChatForUser(user.id, id);
+  }
+
+  @Post("work-orders/:id/agent-chat")
+  postAgentChat(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.workOrders.postAgentChatForUser(user.id, id, body);
   }
 
   @Post("work-orders/:id/rework")

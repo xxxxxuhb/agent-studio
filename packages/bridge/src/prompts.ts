@@ -51,8 +51,10 @@ Forbidden paths: ${(config.constraints.forbidden_paths || []).join(", ") || "(no
 Raw requirement:
 ${rawRequirement}
 
-Human feedback (may be empty):
+Human feedback / @-mention chat supplement (may be empty):
 ${feedback || "(none)"}
+
+When feedback is from Studio Agent chat (@ digital human), treat it as an ad-hoc user request for YOUR role: apply the supplement in-repo, update your artifacts/summary, and do not rewrite the pipeline graph.
 `.trim();
 
   const byStage: Record<Stage, string> = {

@@ -72,6 +72,14 @@ export type StudioRunState = {
   error?: string | null;
 };
 
+export type OrchestratorProgress = {
+  state: StudioRunState;
+  step_index: number;
+  stage: string;
+  summary: string;
+  stage_result?: StageResult;
+};
+
 export type StartStudioRunInput = {
   bridge: BridgeClient;
   steps: OrchestratorStep[];
@@ -82,6 +90,8 @@ export type StartStudioRunInput = {
   bridge_base_url: string;
   /** When true, do not pause for human_approval (auto-continue). */
   auto_approve?: boolean;
+  /** Fired after createRun and after each successful stage (for live UI). */
+  onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
 };
 
 export type ApplyDecisionInput = {
@@ -93,6 +103,7 @@ export type ApplyDecisionInput = {
   decision: "approve" | "reject";
   feedback?: string;
   auto_approve?: boolean;
+  onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
 };
 
 export type OrchestratorOutcome =

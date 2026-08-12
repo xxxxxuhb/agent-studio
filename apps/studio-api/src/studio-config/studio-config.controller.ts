@@ -32,7 +32,7 @@ export class StudioConfigController {
   ) {
     const tid = this.requireTeamId(team_id);
     await this.teams.requireMember(tid, user.id);
-    return this.config.getForTeam(tid);
+    return this.config.getPublic(tid);
   }
 
   @Put()
@@ -43,6 +43,7 @@ export class StudioConfigController {
   ) {
     const tid = this.requireTeamId(team_id);
     await this.teams.requireWritableMember(tid, user.id);
-    return this.config.updateForTeam(tid, body);
+    this.config.updateForTeam(tid, body);
+    return this.config.getPublic(tid);
   }
 }

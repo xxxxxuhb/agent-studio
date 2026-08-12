@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Layout, Menu, Space, Typography, theme } from "antd";
+import { Avatar, Button, Layout, Menu, Space, Typography, theme } from "antd";
 import {
   ApartmentOutlined,
   CloudServerOutlined,
@@ -10,6 +10,8 @@ import {
   SettingOutlined,
   SwapOutlined,
   TeamOutlined,
+  ThunderboltOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import {
   Navigate,
@@ -41,6 +43,52 @@ import {
 import { authApi } from "./api/auth";
 
 const { Header, Sider, Content } = Layout;
+
+const PAGE_META: Record<
+  string,
+  { label: string; icon: React.ReactNode; hint: string }
+> = {
+  "/work-orders": {
+    label: "工单",
+    icon: <FileTextOutlined />,
+    hint: "需求与流水线执行",
+  },
+  "/teams": {
+    label: "团队管理",
+    icon: <TeamOutlined />,
+    hint: "成员与权限",
+  },
+  "/projects": {
+    label: "项目",
+    icon: <FolderOutlined />,
+    hint: "仓库与工作区",
+  },
+  "/bridges": {
+    label: "执行器",
+    icon: <CloudServerOutlined />,
+    hint: "Bridge 与 Agent 驱动",
+  },
+  "/logs": {
+    label: "日志",
+    icon: <ProfileOutlined />,
+    hint: "运行轨迹与产物",
+  },
+  "/digital-humans": {
+    label: "数字人",
+    icon: <RobotOutlined />,
+    hint: "角色与能力档案",
+  },
+  "/pipelines": {
+    label: "流水线",
+    icon: <ApartmentOutlined />,
+    hint: "步骤编排",
+  },
+  "/settings": {
+    label: "设置",
+    icon: <SettingOutlined />,
+    hint: "Bridge / Git / 语言",
+  },
+};
 
 function Shell() {
   const navigate = useNavigate();
@@ -84,17 +132,27 @@ function Shell() {
   const selected =
     menuItems.find((item) => location.pathname.startsWith(item.key))?.key ||
     "/work-orders";
+  const page = PAGE_META[selected] || PAGE_META["/work-orders"]!;
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider breakpoint="lg" collapsedWidth={64} theme="light" width={220}>
+    <Layout className="app-shell">
+      <Sider
+        className="app-sider"
+        breakpoint="lg"
+        collapsedWidth={64}
+        theme="light"
+        width={208}
+      >
         <div className="brand">
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Agent Studio
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            {team?.name || "数字人管理台"}
-          </Typography.Text>
+          <div className="brand-mark">
+            <ThunderboltOutlined />
+          </div>
+          <div className="brand-copy">
+            <Typography.Text className="brand-title">Agent Studio</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+              {team?.name || "数字人管理台"}
+            </Typography.Text>
+          </div>
         </div>
         <Menu
           mode="inline"
@@ -103,22 +161,19 @@ function Shell() {
           onClick={({ key }) => navigate(key)}
         />
       </Sider>
-      <Layout>
-        <Header
-          style={{
-            background: colorBgContainer,
-            padding: "0 24px",
-            borderBottom: "1px solid #f0f0f0",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <Typography.Text strong>
-            {menuItems.find((m) => m.key === selected)?.label}
-          </Typography.Text>
-          <Space>
-            <Typography.Text type="secondary">
+      <Layout className="app-main">
+        <Header className="app-header" style={{ background: colorBgContainer }}>
+          <div className="app-header-title">
+            <span className="app-header-title-icon">{page.icon}</span>
+            <div style={{ lineHeight: 1.2 }}>
+              <div>{page.label}</div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {page.hint}
+              </Typography.Text>
+            </div>
+          </div>
+          <Space size="middle">
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
               {team?.name}
               {team?.my_role ? ` · ${team.my_role}` : ""}
             </Typography.Text>
@@ -133,10 +188,15 @@ function Shell() {
             >
               切换团队
             </Button>
-            <Typography.Text type="secondary">
-              {user?.display_name || user?.username || "…"}
-              {user?.is_admin ? " · 管理员" : ""}
-            </Typography.Text>
+            <div className="user-chip">
+              <Avatar size={26} icon={<UserOutlined />}>
+                {(user?.display_name || user?.username || "?").slice(0, 1)}
+              </Avatar>
+              <Typography.Text style={{ fontSize: 13 }}>
+                {user?.display_name || user?.username || "…"}
+                {user?.is_admin ? " · 管理员" : ""}
+              </Typography.Text>
+            </div>
             <Button
               size="small"
               onClick={() => {
@@ -148,11 +208,10 @@ function Shell() {
             </Button>
           </Space>
         </Header>
-        <Content style={{ margin: 24 }}>
+        <Content className="app-content">
           <div
+            className="app-content-inner"
             style={{
-              padding: 24,
-              minHeight: 360,
               background: colorBgContainer,
               borderRadius: borderRadiusLG,
             }}

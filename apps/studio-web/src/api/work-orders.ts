@@ -1,6 +1,6 @@
 import { del, get, post, put } from "../http";
 import type {
-  ManagerChatThread,
+  AgentChatThread,
   WorkOrder,
   WorkOrderCreate,
 } from "@agent-studio/agent-schema";
@@ -25,7 +25,7 @@ export const workOrdersApi = {
     id: string,
     body: {
       pipeline_id: string;
-      executor?: "dify" | "studio";
+      executor?: "studio";
       auto_approve?: boolean;
       agents_md_path?: string;
       bridge_base_url?: string;
@@ -37,7 +37,7 @@ export const workOrdersApi = {
     id: string,
     body: {
       pipeline_id?: string;
-      executor?: "dify" | "studio";
+      executor?: "studio";
       auto_approve?: boolean;
       agents_md_path?: string;
       bridge_base_url?: string;
@@ -45,11 +45,6 @@ export const workOrdersApi = {
     } = {},
   ) {
     return post<WorkOrder>(`/work-orders/${id}/restart`, body, { timeout: 60_000 });
-  },
-  syncDify(id: string) {
-    return post<WorkOrder>(`/work-orders/${id}/sync-dify`, undefined, {
-      timeout: 45_000,
-    });
   },
   cancel(id: string, feedback = "手动结束运行") {
     return post<WorkOrder>(`/work-orders/${id}/cancel`, { feedback });
@@ -72,18 +67,17 @@ export const workOrdersApi = {
   clarify(id: string, note: string) {
     return post<WorkOrder>(`/work-orders/${id}/clarify`, { note });
   },
+  agentChat(id: string) {
+    return get<AgentChatThread>(`/work-orders/${id}/agent-chat`);
+  },
+  postAgentChat(id: string, message: string) {
+    return post<{ thread: AgentChatThread; order: WorkOrder }>(
+      `/work-orders/${id}/agent-chat`,
+      { message },
+      { timeout: 600_000 },
+    );
+  },
   rework(id: string, step_id: string, feedback = "") {
     return post<WorkOrder>(`/work-orders/${id}/rework`, { step_id, feedback });
-  },
-  getChat(id: string) {
-    return get<ManagerChatThread>(`/work-orders/${id}/chat`);
-  },
-  chat(id: string, messageText: string) {
-    return post<{
-      reply: string;
-      actions: string[];
-      work_order: WorkOrder;
-      thread: ManagerChatThread;
-    }>(`/work-orders/${id}/chat`, { message: messageText });
   },
 };

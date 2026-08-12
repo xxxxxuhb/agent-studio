@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Col,
-  Empty,
   Form,
   Input,
   List,
@@ -22,12 +21,14 @@ import {
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
+  ApartmentOutlined,
   RobotOutlined,
 } from "@ant-design/icons";
 import type { DigitalHuman, PipelineCreate, PipelinePublic, PipelineStep } from "@agent-studio/agent-schema";
 import { digitalHumansApi } from "../api/digital-humans";
 import { pipelinesApi } from "../api/pipelines";
 import { getSelectedTeam } from "../auth/session";
+import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
 
 type EditorValues = {
   id: string;
@@ -35,12 +36,6 @@ type EditorValues = {
   description?: string;
   enabled: boolean;
   tags?: string;
-  dify_enabled: boolean;
-  dify_api_base?: string;
-  dify_api_key?: string;
-  dify_app_id?: string;
-  dify_workflow_id?: string;
-  dify_note?: string;
   steps: Array<{
     id: string;
     agent: string;
@@ -143,13 +138,6 @@ export function PipelinesPage() {
         on_reject: (s.on_reject || "end") as "end" | "retry_step" | "goto",
         reject_goto: "reject_goto" in s ? s.reject_goto : undefined,
       })),
-      dify_enabled: Boolean(draft?.dify?.enabled),
-      dify_api_base: draft?.dify && "api_base" in draft.dify ? draft.dify.api_base || "" : "",
-      dify_api_key: "",
-      dify_app_id: draft?.dify && "app_id" in draft.dify ? draft.dify.app_id || "" : "",
-      dify_workflow_id:
-        draft?.dify && "workflow_id" in draft.dify ? draft.dify.workflow_id || "" : "",
-      dify_note: draft?.dify && "note" in draft.dify ? draft.dify.note || "" : "",
     });
     setEditorOpen(true);
   }
@@ -170,12 +158,6 @@ export function PipelinesPage() {
         on_reject: s.on_reject,
         reject_goto: s.reject_goto,
       })),
-      dify_enabled: Boolean(pipeline.dify?.enabled),
-      dify_api_base: pipeline.dify?.api_base || "",
-      dify_api_key: "",
-      dify_app_id: pipeline.dify?.app_id || "",
-      dify_workflow_id: pipeline.dify?.workflow_id || "",
-      dify_note: pipeline.dify?.note || "",
     });
     setEditorOpen(true);
   }
@@ -193,16 +175,16 @@ export function PipelinesPage() {
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
-        source: { kind: editingId ? "handwritten" : "handwritten" },
+        source: { kind: "handwritten" },
         defaults: { human_approval: true, on_reject: "end" },
         steps: toSteps(values.steps),
         dify: {
-          enabled: values.dify_enabled,
-          api_base: (values.dify_api_base || "").trim(),
-          api_key: (values.dify_api_key || "").trim(),
-          app_id: (values.dify_app_id || "").trim(),
-          workflow_id: (values.dify_workflow_id || "").trim(),
-          note: (values.dify_note || "").trim(),
+          enabled: false,
+          api_base: "",
+          api_key: "",
+          app_id: "",
+          workflow_id: "",
+          note: "",
         },
       };
       if (editingId) {
@@ -256,78 +238,72 @@ export function PipelinesPage() {
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Row justify="space-between" align="middle" gutter={[16, 16]}>
-        <Col>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            流水线
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            把数字人编排成交付流程；支持自然语言生成（共 {total} 条）
-          </Typography.Text>
-        </Col>
-        <Col>
-          <Space wrap>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={async () => {
-                const teamId = getSelectedTeam()?.id;
-                await digitalHumansApi.seedDefaults(teamId);
-                const r = await pipelinesApi.seedDefaults(teamId);
-                message.success(
-                  `导入 ${r.imported.length}，跳过 ${r.skipped.length}，共 ${r.total}`,
-                );
-                await reload();
-              }}
-            >
-              导入默认
-            </Button>
-            <Button onClick={() => setComposeOpen(true)}>自然语言生成</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreate()}>
-              新建流水线
-            </Button>
-          </Space>
-        </Col>
-      </Row>
+    <div className="page-shell">
+      <div className="page-toolbar">
+        <div className="page-toolbar-filters">
+          <Input.Search
+            allowClear
+            placeholder="搜索 id / 名称 / 标签"
+            style={{ width: 240 }}
+            onSearch={setQ}
+            onChange={(e) => {
+              if (!e.target.value) setQ("");
+            }}
+          />
+          <Select
+            value={enabled}
+            style={{ width: 120 }}
+            onChange={setEnabled}
+            options={[
+              { value: "all", label: "全部状态" },
+              { value: "true", label: "仅启用" },
+              { value: "false", label: "仅停用" },
+            ]}
+          />
+          <span className="page-meta">{total} 条</span>
+        </div>
+        <div className="page-toolbar-actions">
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={async () => {
+              const teamId = getSelectedTeam()?.id;
+              await digitalHumansApi.seedDefaults(teamId);
+              const r = await pipelinesApi.seedDefaults(teamId);
+              message.success(
+                `导入 ${r.imported.length}，跳过 ${r.skipped.length}，共 ${r.total}`,
+              );
+              await reload();
+            }}
+          >
+            导入默认
+          </Button>
+          <Button onClick={() => setComposeOpen(true)}>自然语言生成</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreate()}>
+            新建流水线
+          </Button>
+        </div>
+      </div>
 
-      <Space wrap>
-        <Input.Search
-          allowClear
-          placeholder="搜索 id / 名称 / 标签"
-          style={{ width: 260 }}
-          onSearch={setQ}
-          onChange={(e) => {
-            if (!e.target.value) setQ("");
-          }}
-        />
-        <Select
-          value={enabled}
-          style={{ width: 140 }}
-          onChange={setEnabled}
-          options={[
-            { value: "all", label: "全部状态" },
-            { value: "true", label: "仅启用" },
-            { value: "false", label: "仅停用" },
-          ]}
-        />
-      </Space>
-
-      <Row gutter={16}>
-        <Col xs={24} md={8} lg={7}>
-          <Card size="small" title="列表" loading={loading}>
+      <div className="page-split page-split--narrow">
+        <aside className="pane">
+          <Card size="small" title="列表" loading={loading} className="pane-card">
             {!items.length ? (
-              <Empty description="暂无流水线" />
+              <EmptyRich
+                icon={<ApartmentOutlined />}
+                title="还没有流水线"
+                description="导入默认流程，或用自然语言生成步骤编排。"
+                action={
+                  <EmptyRichActionButton icon={<PlusOutlined />} onClick={() => openCreate()}>
+                    新建流水线
+                  </EmptyRichActionButton>
+                }
+              />
             ) : (
               <List
                 dataSource={items}
                 renderItem={(p) => (
                   <List.Item
-                    style={{
-                      cursor: "pointer",
-                      background: p.id === selectedId ? "#e6f4ff" : undefined,
-                      borderRadius: 8,
-                      paddingInline: 8,
-                    }}
+                    className={`list-item-clickable${p.id === selectedId ? " list-item-active" : ""}`}
                     onClick={() => setSelectedId(p.id)}
                   >
                     <List.Item.Meta
@@ -342,11 +318,12 @@ export function PipelinesPage() {
               />
             )}
           </Card>
-        </Col>
+        </aside>
 
-        <Col xs={24} md={16} lg={17}>
+        <section className="pane">
           <Card
             size="small"
+            className="pane-card"
             title={selected ? selected.name : "详情"}
             extra={
               selected ? (
@@ -386,7 +363,11 @@ export function PipelinesPage() {
             }
           >
             {!selected ? (
-              <Empty description="选择左侧流水线，或新建 / 自然语言生成" />
+              <EmptyRich
+                icon={<ApartmentOutlined />}
+                title="选择左侧流水线"
+                description="查看步骤编排，或用自然语言生成新流程。"
+              />
             ) : (
               <Space direction="vertical" size="large" style={{ width: "100%" }}>
                 <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -397,101 +378,7 @@ export function PipelinesPage() {
                   {(selected.tags || []).map((t) => (
                     <Tag key={t}>{t}</Tag>
                   ))}
-                  {selected.dify?.enabled ? (
-                    <Tag color="processing">
-                      Dify 绑定
-                      {selected.dify.api_key_set ? " · Key 已配置" : " · 缺 Key"}
-                    </Tag>
-                  ) : (
-                    <Tag>Dify 用全局默认 App</Tag>
-                  )}
                 </Space>
-                <Card size="small" type="inner" title="Dify 流水线绑定">
-                  <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                    <Typography.Text type="secondary">
-                      一条 Studio 流水线对应一个 Dify Workflow App。启用绑定后，工单选
-                      Dify 执行将使用本流水线的 App Key；未启用则走设置页全局默认。
-                    </Typography.Text>
-                    <Typography.Text>
-                      api_base：{selected.dify?.api_base || "（继承全局）"}
-                    </Typography.Text>
-                    <Typography.Text>
-                      app_id：{selected.dify?.app_id || "—"}
-                      {selected.dify?.workflow_id
-                        ? ` · workflow：${selected.dify.workflow_id}`
-                        : ""}
-                    </Typography.Text>
-                    {selected.dify?.note ? (
-                      <Typography.Text type="secondary">{selected.dify.note}</Typography.Text>
-                    ) : null}
-                    <Space wrap>
-                    <Button
-                      size="small"
-                      onClick={async () => {
-                        try {
-                          const res = await pipelinesApi.difyHealth(selected.id);
-                          if (res.ok) {
-                            message.success(
-                              `连通成功 · binding=${res.binding_source} · ${res.api_base}`,
-                            );
-                          } else {
-                            message.error(res.error || "连通失败");
-                          }
-                        } catch (err) {
-                          message.error(err instanceof Error ? err.message : String(err));
-                        }
-                      }}
-                    >
-                      测试本流水线 Dify
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      onClick={async () => {
-                        try {
-                          const res = await pipelinesApi.getDifyDsl(selected.id);
-                          const blob = new Blob([res.yaml], {
-                            type: "text/yaml;charset=utf-8",
-                          });
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = url;
-                          a.download = res.filename;
-                          a.click();
-                          URL.revokeObjectURL(url);
-                          message.success(res.hint);
-                        } catch (err) {
-                          message.error(err instanceof Error ? err.message : String(err));
-                        }
-                      }}
-                    >
-                      生成并下载 Dify DSL
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={async () => {
-                        try {
-                          const overwrite = Boolean(selected.dify?.app_id);
-                          const res = await pipelinesApi.importDifyDsl(selected.id, {
-                            overwrite,
-                          });
-                          message.success(
-                            res.hint ||
-                              (res.published
-                                ? "已导入并发布到 Dify"
-                                : "已导入到 Dify"),
-                          );
-                          await reload(selected.id);
-                        } catch (err) {
-                          message.error(err instanceof Error ? err.message : String(err));
-                        }
-                      }}
-                    >
-                      一键导入并发布到 Dify
-                    </Button>
-                    </Space>
-                  </Space>
-                </Card>
                 {selected.source?.nl_prompt ? (
                   <Card size="small" type="inner" title="自然语言原文">
                     {selected.source.nl_prompt}
@@ -500,7 +387,7 @@ export function PipelinesPage() {
                 <Steps
                   direction="vertical"
                   size="small"
-                  items=                {selected.steps.map((s) => ({
+                  items={selected.steps.map((s) => ({
                     title: s.label || s.id,
                     description: (
                       <Space direction="vertical" size={0}>
@@ -512,7 +399,7 @@ export function PipelinesPage() {
                             return tip ? (
                               <Typography.Text type="secondary">
                                 {" "}
-                                → Dify {tip}（元数据，未执行）
+                                → Bridge stage {tip}
                               </Typography.Text>
                             ) : null;
                           })()}
@@ -532,8 +419,8 @@ export function PipelinesPage() {
               </Space>
             )}
           </Card>
-        </Col>
-      </Row>
+        </section>
+      </div>
 
       <Modal
         title={editingId ? `编辑 ${editingId}` : "新建流水线"}
@@ -576,53 +463,6 @@ export function PipelinesPage() {
             <Col span={12}>
               <Form.Item name="enabled" label="启用" valuePropName="checked">
                 <Switch />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Typography.Title level={5}>Dify 绑定（一条流水线 ↔ 一个 App）</Typography.Title>
-          <Row gutter={16}>
-            <Col span={24}>
-              <Form.Item
-                name="dify_enabled"
-                label="启用本流水线独立 Dify App"
-                valuePropName="checked"
-                extra="关闭则使用设置页的全局默认 Workflow App"
-              >
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="dify_api_base" label="API Base（可选）">
-                <Input placeholder="留空则用全局 api_base" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="dify_api_key"
-                label="Workflow App API Key"
-                extra={
-                  editingId
-                    ? "已保存的 Key 不会回显；留空表示保持不变"
-                    : "在 Dify 对应应用「访问 API」中复制"
-                }
-              >
-                <Input.Password placeholder="app-..." />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="dify_app_id" label="App ID（可选）">
-                <Input placeholder="Dify 应用 ID，便于对照" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="dify_workflow_id" label="Workflow ID（可选）">
-                <Input />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="dify_note" label="备注">
-                <Input.TextArea rows={2} placeholder="例如：对应 Dify 里「交付流水线」应用" />
               </Form.Item>
             </Col>
           </Row>
@@ -771,6 +611,6 @@ export function PipelinesPage() {
           placeholder="描述你想要的流水线…"
         />
       </Modal>
-    </Space>
+    </div>
   );
 }

@@ -78,6 +78,7 @@ export async function runStudioStart(opts: {
   routingMode: "auto" | "explicit";
   humans: DigitalHuman[];
   autoApprove: boolean;
+  onProgress?: Parameters<typeof startStudioRun>[0]["onProgress"];
 }): Promise<OrchestratorOutcome> {
   const steps = toOrchestratorSteps(opts.order.run?.steps || []);
   return startStudioRun({
@@ -89,6 +90,7 @@ export async function runStudioStart(opts: {
     routing_mode: opts.routingMode,
     bridge_base_url: opts.bridgeBaseUrl,
     auto_approve: opts.autoApprove,
+    onProgress: opts.onProgress,
   });
 }
 
@@ -97,6 +99,7 @@ export async function runStudioDecision(opts: {
   decision: "approve" | "reject";
   feedback?: string;
   humans: DigitalHuman[];
+  onProgress?: Parameters<typeof applyStudioDecision>[0]["onProgress"];
 }): Promise<OrchestratorOutcome> {
   const run = opts.order.run;
   if (!run?.studio?.bridge_run_id) {
@@ -122,5 +125,6 @@ export async function runStudioDecision(opts: {
     decision: opts.decision,
     feedback: opts.feedback,
     auto_approve: Boolean(run.auto_approve),
+    onProgress: opts.onProgress,
   });
 }

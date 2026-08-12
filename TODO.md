@@ -24,19 +24,20 @@ Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远
 
 ## P1 — 稳态运维
 
-### Studio 自管编排 + Bridge（减/去掉 Dify）
+### Studio 自管编排 + Bridge（已去掉 Dify 执行路径）
 
 - [x] **独立包 `packages/orchestrator`（或同名）**：编排器**不进** `studio-api` 业务大服务；Studio 只做鉴权、工单持久化、WebSocket 推送，通过包 API / 薄适配层驱动。
 - [x] 包职责：按流水线步骤顺序调 Bridge（ensure → select → stages）；管理 run 状态机（running / pending_approval / failed / completed）；Human Input 暂停与 approve/reject/feedback；失败 resume。
 - [x] **Human Input**：阶段 `pendingHumanApproval` → 通知宿主暂停 → 宿主（Studio）给人审 → 回传 decision → 包继续下一 stage（去掉 Dify `form_token` / syncDify / Console DSL）。
-- [x] **执行器**：`executor=studio`（默认自研包）；`executor=dify` 短期兼容后弃用。
-- [x] **流水线**：Studio/MySQL 存步骤定义；包只消费契约（放 `agent-schema`）；不再强制导入 Dify。
-- [ ] **减负**：本地可不启 Dify；Compose profile 只需 MySQL + Studio + Bridge（+ 可选包同进程或侧车）。
+- [x] **执行器**：仅 `executor=studio`（旧 `dify`/`local` 读库时 coerce）；Nest `src/dify` 模块与 Web Dify 面板已删。
+- [x] **流水线**：Studio/MySQL 存步骤定义；包只消费契约（放 `agent-schema`）；不再导入 Dify DSL。
+- [ ] **减负**：Compose profile 只需 MySQL + Studio + Bridge（+ 可选 GitLab）。
+- [x] 删除仓库内 `deploy/dify`（`v2`）。
 - [x] 进程形态二选一写清：先 **库内嵌**（API 进程 `import @agent-studio/orchestrator`），需要再拆独立 worker 进程。
 - [ ] （后置）可视化拖拽改图。
 - [ ] 阶段中断续跑（resume）仍待做。
 
-Notes (2026-08-12): 首刀已落地：`@agent-studio/orchestrator` + Web 默认 `executor=studio`；Dify 仍可选。审批闸门走 Studio decide → Bridge `/decision` + 下一 stage。
+Notes (2026-08-12): `v2` 分支已剥离 Dify 执行与控制面：`StudioConfig` 承接 `bridge_base_url` / `agents_md_path` / Git；工单 start/restart/decide 仅走 orchestrator；产物目录名 `docs/dify-runs` 暂保留。
 
 ### 工单可靠性
 
@@ -115,11 +116,9 @@ Notes (2026-08-11): 移动端 = 远程操作台，不是移动版执行器。
 
 ### Cloud Dify Agent as step executor
 
-- [ ] 数字人步骤绑定云端 Dify Agent（不只 pipeline 级 Workflow）。
-- [ ] `dify` 绑定扩展 Agent App Key / `api_base`；步骤执行时调 Dify Agent API。
-- [ ] 云 Agent 的 repo clone / sandbox 策略（与云 Bridge 工作区方案对齐后再做）。
+- [ ] ~~数字人步骤绑定云端 Dify Agent~~（已从主路径移除；若再做应走独立 executor 插件，不回嵌旧 Workflow。）
 
-Notes (2026-08-10): UI `dify.agent_id` / `agent_name` 仍是元数据；工单仍走 Dify Workflow → HTTP Bridge。云 Bridge 未通前投入产出偏低。
+Notes: `v2` 已删除控制面 Dify 模块；本项降为可选未来插件。
 
 ### 工程债 / 中期优化
 

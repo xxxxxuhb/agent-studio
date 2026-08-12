@@ -27,7 +27,7 @@ import {
 } from "./git-remote";
 import { ProjectEntity } from "./entities/project.entity";
 import { TeamsService } from "../teams/teams.service";
-import { DifyConfigService } from "../dify/dify-config.service";
+import { StudioConfigService } from "../studio-config/studio-config.service";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,7 +49,7 @@ export class ProjectsService implements OnModuleInit {
     @InjectRepository(ProjectEntity)
     private readonly repo: Repository<ProjectEntity>,
     private readonly teams: TeamsService,
-    private readonly difyConfig: DifyConfigService,
+    private readonly studioConfig: StudioConfigService,
   ) {}
 
   onModuleInit() {
@@ -293,7 +293,7 @@ export class ProjectsService implements OnModuleInit {
     const gitOverrides = (() => {
       const tid = (project.team_id || "").trim();
       if (!tid) return undefined;
-      const t = this.difyConfig.getTeamSecrets(tid);
+      const t = this.studioConfig.getEffectiveForTeam(tid);
       return {
         git_ssh_key_path: t.git_ssh_key_path || undefined,
         git_prefer_ssh: t.git_prefer_ssh,

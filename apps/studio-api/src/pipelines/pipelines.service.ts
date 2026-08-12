@@ -19,7 +19,7 @@ import {
   type PipelineUpdate,
 } from "@agent-studio/agent-schema";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
-import { DifyConfigService } from "../dify/dify-config.service";
+import { StudioConfigService } from "../studio-config/studio-config.service";
 import { TeamsService } from "../teams/teams.service";
 import { bridgeAuthHeaders } from "../bridges/bridge-http";
 import { DEFAULT_PIPELINES, composePipelineFromPrompt } from "./defaults";
@@ -37,7 +37,7 @@ export class PipelinesService {
     @InjectRepository(PipelineEntity)
     private readonly repo: Repository<PipelineEntity>,
     private readonly humans: DigitalHumansService,
-    private readonly difyConfig: DifyConfigService,
+    private readonly studioConfig: StudioConfigService,
     private readonly teams: TeamsService,
   ) {}
 
@@ -450,9 +450,7 @@ export class PipelinesService {
     }
 
     const tid = (teamId || "").trim();
-    const configured = tid
-      ? this.difyConfig.getEffectiveForTeam(tid).bridge_base_url
-      : this.difyConfig.get().bridge_base_url;
+    const configured = this.studioConfig.getEffectiveForTeam(tid).bridge_base_url;
     const bridgeBase = resolveBridgeBaseUrl(configured);
     const url = `${bridgeBase}/compose/pipeline`;
     try {

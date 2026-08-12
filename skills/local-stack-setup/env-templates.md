@@ -15,15 +15,6 @@ mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
 docker compose -f deploy/gitlab/docker-compose.yml up -d
 ```
 
-## Docker Dify
-
-```bash
-cd deploy/dify
-cp .env.example .env
-cat .env.agent-studio.example >> .env   # then set a real SECRET_KEY
-docker compose up -d
-```
-
 Compose index: `deploy/README.md`.
 
 ## `apps/studio-api/.env`
@@ -90,14 +81,3 @@ BRIDGE_GITLAB_WEB=http://localhost:8929
 ## GitLab `deploy/gitlab/docker-compose.yml`
 
 See repo file `deploy/gitlab/docker-compose.yml` (container `agent-studio-gitlab`, ports 8929 / 2224).
-
-## Dify docker `.env` knobs
-
-```env
-SECRET_KEY=
-SSRF_PROXY_ALLOW_PRIVATE_DOMAINS=host.docker.internal
-SSRF_PROXY_ALLOW_PRIVATE_IPS=192.168.65.2,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
-APP_MAX_EXECUTION_TIME=7200
-```
-
-Also: `deploy/dify/.env.agent-studio.example`.

@@ -14,4 +14,5 @@ export type {
   StartStudioRunInput,
   ApplyDecisionInput,
   OrchestratorOutcome,
+  OrchestratorProgress,
 } from "./types";

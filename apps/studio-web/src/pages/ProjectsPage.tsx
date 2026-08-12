@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Col,
-  Empty,
   Form,
   Input,
   List,
@@ -19,6 +18,7 @@ import {
 } from "antd";
 import {
   CloudDownloadOutlined,
+  FolderOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
@@ -34,6 +34,7 @@ import type {
 import { teamsApi } from "../api/auth";
 import { projectsApi } from "../api/projects";
 import { getSelectedTeam } from "../auth/session";
+import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
 
 type EditorValues = {
   id: string;
@@ -244,37 +245,36 @@ export function ProjectsPage() {
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Space wrap>
-        <Input.Search
-          placeholder="搜索项目"
-          allowClear
-          style={{ width: 240 }}
-          onSearch={setQ}
-        />
-        <Button icon={<ReloadOutlined />} onClick={() => void reload()}>
-          刷新
-        </Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          新建项目
-        </Button>
-        <Typography.Text type="secondary">共 {total} 个</Typography.Text>
-      </Space>
+    <div className="page-shell">
+      <div className="page-toolbar">
+        <div className="page-toolbar-filters">
+          <Input.Search
+            placeholder="搜索项目"
+            allowClear
+            style={{ width: 240 }}
+            onSearch={setQ}
+          />
+          <span className="page-meta">共 {total} 个</span>
+        </div>
+        <div className="page-toolbar-actions">
+          <Button icon={<ReloadOutlined />} onClick={() => void reload()}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建项目
+          </Button>
+        </div>
+      </div>
 
-      <Row gutter={16}>
-        <Col xs={24} lg={8}>
-          <Card size="small" title="项目列表" loading={loading}>
+      <div className="page-split">
+        <aside className="pane">
+          <Card size="small" title="项目列表" loading={loading} className="pane-card">
             {items.length ? (
               <List
                 dataSource={items}
                 renderItem={(p) => (
                   <List.Item
-                    style={{
-                      cursor: "pointer",
-                      background: p.id === selectedId ? "#f5f5f5" : undefined,
-                      padding: "8px 12px",
-                      borderRadius: 6,
-                    }}
+                    className={`list-item-clickable${p.id === selectedId ? " list-item-active" : ""}`}
                     onClick={() => setSelectedId(p.id)}
                   >
                     <List.Item.Meta
@@ -290,14 +290,24 @@ export function ProjectsPage() {
                 )}
               />
             ) : (
-              <Empty description="暂无项目" />
+              <EmptyRich
+                icon={<FolderOutlined />}
+                title="还没有项目"
+                description="把多仓工作区配成项目，工单可绑定项目做选仓。"
+                action={
+                  <EmptyRichActionButton icon={<PlusOutlined />} onClick={openCreate}>
+                    新建项目
+                  </EmptyRichActionButton>
+                }
+              />
             )}
           </Card>
-        </Col>
+        </aside>
 
-        <Col xs={24} lg={16}>
+        <section className="pane">
           <Card
             size="small"
+            className="pane-card"
             title={selected ? selected.name : "详情"}
             extra={
               selected ? (
@@ -327,7 +337,11 @@ export function ProjectsPage() {
             }
           >
             {!selected ? (
-              <Empty description="选择左侧项目" />
+              <EmptyRich
+                icon={<FolderOutlined />}
+                title="选择左侧项目"
+                description="查看仓库、克隆路径，或编辑项目配置。"
+              />
             ) : (
               <Space direction="vertical" size={12} style={{ width: "100%" }}>
                 <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -409,8 +423,8 @@ export function ProjectsPage() {
               </Space>
             )}
           </Card>
-        </Col>
-      </Row>
+        </section>
+      </div>
 
       <Modal
         title={editingId ? `编辑 ${editingId}` : "新建项目"}
@@ -615,6 +629,6 @@ export function ProjectsPage() {
           </Form.List>
         </Form>
       </Modal>
-    </Space>
+    </div>
   );
 }
