@@ -194,3 +194,50 @@ code {
   font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
   font-size: 0.85em;
 }
+
+.actions {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.hints {
+  margin: 10px 0 0;
+  color: var(--warn);
+  font-size: 0.82rem;
+}
+
+.log-panel {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  background: #1c1b19;
+  color: #e8e6e1;
+}
+
+.log-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #3a3834;
+}
+
+.log-head .label {
+  color: #b8b4aa;
+}
+
+.log-sub {
+  color: #7a776f;
+  font-size: 0.75rem;
+}
+
+.log-view {
+  margin: 0;
+  padding: 10px;
+  max-height: 180px;
+  overflow: auto;
+  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

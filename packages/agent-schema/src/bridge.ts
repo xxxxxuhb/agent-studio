@@ -4,6 +4,10 @@ import { z } from "zod";
 export const BridgeStatusSchema = z.enum(["online", "offline", "busy"]);
 export type BridgeStatus = z.infer<typeof BridgeStatusSchema>;
 
+/** How this executor links to Studio: CLI process vs desktop app wrapper. */
+export const BridgeLinkTypeSchema = z.enum(["cli", "desktop"]);
+export type BridgeLinkType = z.infer<typeof BridgeLinkTypeSchema>;
+
 export const BridgeExecutorSchema = z.object({
   id: z.string(),
   /** Owning team; empty = legacy / unassigned (bootstrap stamps default). */
@@ -17,6 +21,8 @@ export const BridgeExecutorSchema = z.object({
   dry_run: z.boolean().optional().default(false),
   model: z.string().optional().default(""),
   platform: z.string().optional().default(""),
+  /** cli = npx/npm bridge process; desktop = bridge-desktop App */
+  link_type: BridgeLinkTypeSchema.optional().default("cli"),
   available_drivers: z.array(z.string()).optional().default([]),
   status: BridgeStatusSchema.default("offline"),
   /** Active Bridge run id when status=busy */
@@ -37,6 +43,7 @@ export const BridgeRegisterSchema = z.object({
   dry_run: z.boolean().optional().default(false),
   model: z.string().optional().default(""),
   platform: z.string().optional().default(""),
+  link_type: BridgeLinkTypeSchema.optional().default("cli"),
   available_drivers: z.array(z.string()).optional().default([]),
   id: z.string().optional(),
   status: BridgeStatusSchema.optional().default("online"),
@@ -52,6 +59,7 @@ export const BridgeHeartbeatSchema = z.object({
   driver_label: z.string().optional(),
   dry_run: z.boolean().optional(),
   model: z.string().optional(),
+  link_type: BridgeLinkTypeSchema.optional(),
   status: BridgeStatusSchema.optional().default("online"),
   current_run_id: z.string().optional(),
 });
@@ -72,6 +80,8 @@ export const BridgePrepareSchema = z.object({
   studio_url: z.string().min(1),
   /** How the executor should authenticate the agent (key stays on client / machine) */
   auth_mode: BridgeAuthModeSchema.optional().default("none"),
+  /** Prefer CLI install command vs desktop app instructions */
+  link_type: BridgeLinkTypeSchema.optional().default("cli"),
   note: z.string().optional().default(""),
 });
 export type BridgePrepare = z.infer<typeof BridgePrepareSchema>;

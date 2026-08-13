@@ -12,6 +12,7 @@ import { TeamsModule } from "../teams/teams.module";
 import { WorkOrderEntity } from "./entities/work-order.entity";
 import { WorkOrdersController } from "./work-orders.controller";
 import { WorkOrdersService } from "./work-orders.service";
+import { WorkOrderStudioRunner } from "./work-order-studio-runner.service";
 
 @Module({
   imports: [
@@ -26,7 +27,7 @@ import { WorkOrdersService } from "./work-orders.service";
     BridgesModule,
   ],
   controllers: [WorkOrdersController],
-  providers: [WorkOrdersService, RealtimeGateway],
+  providers: [WorkOrdersService, WorkOrderStudioRunner, RealtimeGateway],
   exports: [WorkOrdersService],
 })
 export class WorkOrdersModule {}

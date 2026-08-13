@@ -18,7 +18,7 @@ function expandHome(p: string): string {
 
 /**
  * Convert http(s) git remotes to SSH.
- * Local GitLab compose often maps SSH to a non-22 port (e.g. 2224).
+ * Self-hosted GitLab often maps SSH to a non-22 port — set BRIDGE_GIT_SSH_PORT.
  */
 export function preferSshGitUrl(
   remoteUrl: string,
@@ -40,7 +40,7 @@ export function preferSshGitUrl(
     Number(process.env.BRIDGE_GIT_SSH_PORT || process.env.STUDIO_GIT_SSH_PORT || 0);
   const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : 0;
 
-  // Self-hosted HTTP often uses :8929 while SSH is on another port.
+  // Self-hosted HTTP may use a custom port while SSH uses another — set BRIDGE_GIT_SSH_PORT.
   if (port && port !== 22) {
     return `ssh://${sshUser}@${host}:${port}/${projectPath}.git`;
   }

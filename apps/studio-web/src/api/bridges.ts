@@ -1,5 +1,5 @@
 import { get, del, post } from "../http";
-import type { BridgeExecutor } from "@agent-studio/agent-schema";
+import type { BridgeExecutor, BridgeLinkType } from "@agent-studio/agent-schema";
 
 export type BridgePrepareInput = {
   name: string;
@@ -8,6 +8,7 @@ export type BridgePrepareInput = {
   base_url: string;
   studio_url: string;
   auth_mode?: "key" | "login" | "none";
+  link_type?: BridgeLinkType;
   note?: string;
 };
 
@@ -16,6 +17,7 @@ export type BridgePrepareResult = {
   install_command: string;
   local_command: string;
   auth_mode: string;
+  link_type: BridgeLinkType;
   agent_env_key: string;
   token_configured: boolean;
 };

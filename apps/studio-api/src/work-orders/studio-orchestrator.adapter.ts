@@ -1,6 +1,7 @@
 import {
   applyStudioDecision,
   createHttpBridgeClient,
+  resumeStudioRun,
   startStudioRun,
   type OrchestratorOutcome,
   type OrchestratorStep,
@@ -123,6 +124,43 @@ export async function runStudioDecision(opts: {
     },
     current_step_index: run.current_step_index ?? 0,
     decision: opts.decision,
+    feedback: opts.feedback,
+    auto_approve: Boolean(run.auto_approve),
+    onProgress: opts.onProgress,
+  });
+}
+
+/** Resume failed step on existing Bridge run (no createRun). */
+export async function runStudioResume(opts: {
+  order: WorkOrder;
+  feedback?: string;
+  humans: DigitalHuman[];
+  onProgress?: Parameters<typeof resumeStudioRun>[0]["onProgress"];
+}): Promise<OrchestratorOutcome> {
+  const run = opts.order.run;
+  if (!run?.studio?.bridge_run_id) {
+    throw new Error("missing studio.bridge_run_id");
+  }
+  const bridgeBaseUrl =
+    run.studio.bridge_base_url || "http://127.0.0.1:8787";
+  const failedIdx = run.steps.findIndex((s) => s.status === "failed");
+  const stepIndex =
+    failedIdx >= 0 ? failedIdx : (run.current_step_index ?? 0);
+  return resumeStudioRun({
+    bridge: makeBridgeClient(bridgeBaseUrl),
+    steps: toOrchestratorSteps(run.steps || []),
+    agents: agentLookup(opts.humans),
+    state: {
+      bridge_run_id: run.studio.bridge_run_id,
+      bridge_base_url: bridgeBaseUrl,
+      current_stage: run.studio.current_stage,
+      last_summary: run.studio.last_summary,
+      pending_human: false,
+      dry_run: run.studio.dry_run,
+      status: "running",
+      error: null,
+    },
+    current_step_index: stepIndex,
     feedback: opts.feedback,
     auto_approve: Boolean(run.auto_approve),
     onProgress: opts.onProgress,

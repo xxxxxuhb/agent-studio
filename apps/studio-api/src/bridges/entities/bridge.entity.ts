@@ -37,6 +37,10 @@ export class BridgeEntity {
   @Column({ type: "varchar", length: 64, default: "" })
   platform!: string;
 
+  /** cli | desktop — how the executor process is launched */
+  @Column({ type: "varchar", length: 16, default: "cli" })
+  link_type!: string;
+
   @Column({ type: "json" })
   available_drivers!: string[];
 

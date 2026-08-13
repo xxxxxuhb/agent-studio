@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
+  forwardRef,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
@@ -16,6 +18,7 @@ import {
   WorkOrderCreateSchema,
   WorkOrderDecisionSchema,
   WorkOrderRestartSchema,
+  WorkOrderResumeSchema,
   WorkOrderSchema,
   WorkOrderStartSchema,
   WorkOrderUpdateSchema,
@@ -37,13 +40,9 @@ import { RealtimeHub } from "../realtime/realtime.hub";
 import { RunLogsService } from "../run-logs/run-logs.service";
 import { StudioConfigService } from "../studio-config/studio-config.service";
 import { TeamsService } from "../teams/teams.service";
-import type { OrchestratorOutcome, OrchestratorProgress } from "@agent-studio/orchestrator";
 import {
   agentLookup,
   makeBridgeClient,
-  runStudioDecision,
-  runStudioStart,
-  studioStateFromOutcome,
 } from "./studio-orchestrator.adapter";
 import {
   appendAgentChatMessages,
@@ -59,6 +58,7 @@ import {
   ensureWorkspaceViaBridge,
   prepareProjectRouting as prepareProjectRoutingFn,
 } from "./work-order-routing";
+import { WorkOrderStudioRunner } from "./work-order-studio-runner.service";
 
 export { studioReachableBridgeBase } from "./work-order-bridge-utils";
 export { parseBridgeGitNote } from "./work-order-bridge-git";
@@ -66,8 +66,6 @@ export { parseBridgeGitNote } from "./work-order-bridge-git";
 @Injectable()
 export class WorkOrdersService implements OnModuleInit {
   private readonly logger = new Logger(WorkOrdersService.name);
-  /** Studio orchestrator jobs (start/decide) — must not block HTTP. */
-  private readonly studioInFlight = new Map<string, Promise<void>>();
   /** Serialize Bridge-idle queue admission per team. */
   private readonly admitLocks = new Set<string>();
 
@@ -82,6 +80,8 @@ export class WorkOrdersService implements OnModuleInit {
     private readonly realtime: RealtimeHub,
     private readonly studioConfig: StudioConfigService,
     private readonly bridges: BridgesService,
+    @Inject(forwardRef(() => WorkOrderStudioRunner))
+    private readonly studioRunner: WorkOrderStudioRunner,
   ) {}
 
   onModuleInit() {
@@ -90,7 +90,7 @@ export class WorkOrdersService implements OnModuleInit {
     });
   }
 
-  private nowIso() {
+  nowIso() {
     return new Date().toISOString();
   }
 
@@ -156,7 +156,7 @@ export class WorkOrdersService implements OnModuleInit {
     };
   }
 
-  private appendRunEvent(
+  appendRunEvent(
     order: WorkOrder,
     partial: {
       type: WorkOrderRunEvent["type"];
@@ -517,7 +517,7 @@ export class WorkOrdersService implements OnModuleInit {
     const text = message.trim();
     if (!text) throw new BadRequestException("消息不能为空");
 
-    if (this.studioInFlight.has(id)) {
+    if (this.studioRunner.isBusy(id)) {
       throw new ConflictException(
         "Studio 编排正在执行，请稍后再 @ 数字人",
       );
@@ -984,6 +984,7 @@ export class WorkOrdersService implements OnModuleInit {
       summary: "",
       output: "",
       output_title: "",
+      artifact_paths: [],
       feedback: "",
     }));
 
@@ -1042,7 +1043,7 @@ export class WorkOrdersService implements OnModuleInit {
       });
     }
 
-    return this.startStudioFromDraft(order, next, {
+    return this.studioRunner.startFromDraft(order, next, {
       agents_md_path: routing.agents_md_path,
       routing_mode: routing.routing_mode,
       bridge_base_url: studioBridgeBase,
@@ -1213,388 +1214,94 @@ export class WorkOrdersService implements OnModuleInit {
     return this.restart(id, input);
   }
 
-  /** Drive Bridge stages via `@agent-studio/orchestrator` (no Dify). */
-  private async startStudioFromDraft(
-    previous: WorkOrder,
-    draft: WorkOrder,
-    opts: {
-      agents_md_path?: string;
-      routing_mode?: "auto" | "explicit";
-      bridge_base_url?: string;
-    },
-  ): Promise<WorkOrder> {
-    void previous;
-    if (!draft.run) throw new BadRequestException("run missing");
-    const bridgeBase =
-      (opts.bridge_base_url || "").trim() || "http://127.0.0.1:8787";
-    const stamp = this.nowIso();
-    const agentsMdPath =
-      opts.agents_md_path || draft.run.selected_agents_md_path || "auto";
-    const routingMode = opts.routing_mode || "explicit";
-    const autoApprove = Boolean(draft.run.auto_approve);
+  /**
+   * Resume from the failed pipeline step on the same Bridge run.
+   * Prefer this over restart when bridge_run_id is still valid.
+   */
+  async resume(id: string, input: unknown = {}): Promise<WorkOrder> {
+    const body = WorkOrderResumeSchema.parse(input ?? {});
+    const order = await this.get(id);
+    if (order.status !== "failed") {
+      throw new BadRequestException(
+        `仅失败状态可续跑（当前：${order.status}）。进行中请等待，或用「重新执行」开新一轮。`,
+      );
+    }
+    const run = order.run;
+    if (!run) {
+      throw new BadRequestException("无运行记录，请先启动流水线");
+    }
+    const bridgeRunId = (run.studio?.bridge_run_id || "").trim();
+    if (!bridgeRunId) {
+      throw new BadRequestException(
+        "缺少 Bridge run id，无法续跑；请改用「重新执行」",
+      );
+    }
+    if (!run.steps?.length) {
+      throw new BadRequestException("流水线无步骤，无法续跑");
+    }
 
-    draft.run.studio = {
-      bridge_run_id: draft.run.studio?.bridge_run_id || "",
+    const failedIdx = run.steps.findIndex((s) => s.status === "failed");
+    const stepIndex =
+      failedIdx >= 0 ? failedIdx : (run.current_step_index ?? 0);
+    const step = run.steps[stepIndex];
+    if (!step) {
+      throw new BadRequestException("找不到可续跑的失败步骤");
+    }
+
+    const stamp = this.nowIso();
+    const bridgeBase =
+      (run.studio?.bridge_base_url || "").trim() || "http://127.0.0.1:8787";
+    const feedback = (body.feedback || "").trim();
+
+    order.status = "running";
+    run.finished_at = undefined;
+    run.current_step_index = stepIndex;
+    step.status = "running";
+    step.started_at = stamp;
+    step.finished_at = undefined;
+    step.summary = feedback
+      ? `续跑中…（反馈：${feedback.slice(0, 120)}）`
+      : "从失败阶段续跑中…";
+    run.studio = {
+      bridge_run_id: bridgeRunId,
       bridge_base_url: bridgeBase,
-      current_stage: draft.run.studio?.current_stage || "",
-      last_summary: "Studio 编排启动中…",
+      current_stage: run.studio?.current_stage || "",
+      last_summary: step.summary,
       pending_human: false,
-      dry_run: Boolean(draft.run.studio?.dry_run),
-      status: "starting",
-      error: null,
-      last_synced_at: stamp,
-    };
-    const first = draft.run.steps[0];
-    if (first && first.status === "pending") {
-      first.status = "running";
-      first.started_at = stamp;
-    }
-    this.appendRunEvent(draft, {
-      type: "info",
-      message: "Studio 编排已提交（后台执行 Bridge 阶段，页面可刷新查看进度）",
-    });
-    const saved = await this.write(draft);
-    this.enqueueStudioJob(saved.id, saved.run!.run_id, async (order) => {
-      const humans = await this.humans.list({ enabled: "all" });
-      const outcome = await runStudioStart({
-        order,
-        bridgeBaseUrl: bridgeBase,
-        agentsMdPath,
-        routingMode,
-        humans,
-        autoApprove,
-        onProgress: async (progress) => {
-          await this.persistStudioProgress(order.id, order.run!.run_id, progress, bridgeBase);
-        },
-      });
-      const latest = await this.get(order.id);
-      if (latest.run?.run_id !== order.run?.run_id) return;
-      await this.applyStudioOutcome(latest, outcome, bridgeBase);
-    });
-    return saved;
-  }
-
-  private async decideStudio(
-    id: string,
-    body: {
-      decision?: "approve" | "reject";
-      action?: string;
-      feedback?: string;
-    },
-  ): Promise<WorkOrder> {
-    let order = await this.get(id);
-    if (
-      order.status !== "pending_approval" &&
-      !order.run?.studio?.pending_human
-    ) {
-      throw new BadRequestException("当前没有待确认的人工闸门");
-    }
-    const decision =
-      body.decision ||
-      (body.action && /reject|驳回|拒绝/i.test(body.action)
-        ? "reject"
-        : "approve");
-    this.appendRunEvent(order, {
-      type: "human_decision",
-      message: `提交确认：${decision}${body.feedback ? ` · 反馈=${body.feedback}` : ""}`,
-      action: decision,
-      step_id: order.run?.steps[order.run.current_step_index]?.step_id,
-      agent: order.run?.steps[order.run.current_step_index]?.agent,
-    });
-    if (order.run?.studio) {
-      order.run.studio.status = "running";
-      order.run.studio.pending_human = false;
-      order.run.studio.last_summary = `已提交 ${decision}，继续编排中…`;
-      order.run.studio.last_synced_at = this.nowIso();
-    }
-    order.status = "running";
-    const step = order.run?.steps[order.run.current_step_index];
-    if (step) step.status = "running";
-    const saved = await this.write(order);
-    const bridgeBase =
-      saved.run?.studio?.bridge_base_url || "http://127.0.0.1:8787";
-    const feedback = body.feedback || "";
-    this.enqueueStudioJob(saved.id, saved.run!.run_id, async (current) => {
-      const humans = await this.humans.list({ enabled: "all" });
-      const outcome = await runStudioDecision({
-        order: current,
-        decision,
-        feedback,
-        humans,
-        onProgress: async (progress) => {
-          await this.persistStudioProgress(
-            current.id,
-            current.run!.run_id,
-            progress,
-            bridgeBase,
-          );
-        },
-      });
-      const latest = await this.get(current.id);
-      if (latest.run?.run_id !== current.run?.run_id) return;
-      await this.applyStudioOutcome(latest, outcome, bridgeBase);
-    });
-    return saved;
-  }
-
-  /** Mid-run progress for live UI (does not flip terminal statuses). */
-  private async persistStudioProgress(
-    workOrderId: string,
-    runId: string,
-    progress: OrchestratorProgress,
-    bridgeBaseUrl: string,
-  ): Promise<void> {
-    const order = await this.get(workOrderId);
-    if (!order.run || order.run.run_id !== runId) return;
-    if (
-      order.status === "completed" ||
-      order.status === "failed" ||
-      order.status === "rejected"
-    ) {
-      return;
-    }
-    const stamp = this.nowIso();
-    const state = studioStateFromOutcome(
-      {
-        kind: "running",
-        state: progress.state,
-        step_index: progress.step_index,
-        stage: progress.stage,
-        summary: progress.summary,
-        stage_result: progress.stage_result || {
-          runId: progress.state.bridge_run_id,
-          stage: progress.stage,
-          status: "ok",
-          summary: progress.summary,
-          artifacts: [],
-          pendingHumanApproval: false,
-        },
-      },
-      bridgeBaseUrl,
-    );
-    order.status = "running";
-    order.run.studio = {
-      bridge_run_id: state.bridge_run_id || "",
-      bridge_base_url: state.bridge_base_url || bridgeBaseUrl,
-      current_stage: progress.stage || state.current_stage || "",
-      last_summary: progress.summary || state.last_summary || "",
-      pending_human: false,
-      dry_run: Boolean(state.dry_run),
+      dry_run: Boolean(run.studio?.dry_run),
       status: "running",
       error: null,
       last_synced_at: stamp,
     };
-    order.run.current_step_index = progress.step_index;
-    for (let i = 0; i < order.run.steps.length; i++) {
-      const s = order.run.steps[i]!;
-      if (i < progress.step_index) {
-        if (s.status === "pending" || s.status === "running") {
-          s.status = "approved";
-          s.finished_at = s.finished_at || stamp;
-        }
-      } else if (i === progress.step_index) {
-        s.status = "running";
-        s.started_at = s.started_at || stamp;
-        s.summary = progress.summary || s.summary;
-        if (progress.stage_result?.summary) {
-          s.output = progress.stage_result.summary;
-          s.output_title = s.output_title || s.label || progress.stage;
-        }
-      }
-    }
     this.appendRunEvent(order, {
-      type: "bridge_stage",
-      message: progress.summary || `stage ${progress.stage}`,
-      step_id: order.run.steps[progress.step_index]?.step_id,
-      agent: order.run.steps[progress.step_index]?.agent,
-      bridge_stage: progress.stage,
-      detail: { stage: progress.stage, step_index: progress.step_index },
+      type: "info",
+      message: `从失败阶段续跑：${step.label || step.step_id}${
+        feedback ? ` · 反馈=${feedback}` : ""
+      }`,
+      step_id: step.step_id,
+      agent: step.agent,
+      bridge_run_id: bridgeRunId,
     });
-    await this.write(order);
+
+    const saved = await this.write(order);
+    this.studioRunner.enqueueResume(saved, { feedback, bridgeBase });
+    return saved;
   }
 
-  /** Run Studio orchestrator off the request path; ignore if a newer run replaced it. */
-  private enqueueStudioJob(
-    workOrderId: string,
-    runId: string,
-    job: (order: WorkOrder) => Promise<void>,
-  ): void {
-    const prev = this.studioInFlight.get(workOrderId);
-    const run = (async () => {
-      if (prev) {
-        try {
-          await prev;
-        } catch {
-          /* previous job failure already persisted */
-        }
-      }
-      try {
-        const order = await this.get(workOrderId);
-        if (order.run?.run_id !== runId) return;
-        await job(order);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(
-          `studio orchestrator failed for ${workOrderId}/${runId}: ${msg}`,
-        );
-        try {
-          const latest = await this.get(workOrderId);
-          if (latest.run?.run_id !== runId || !latest.run) return;
-          latest.status = "failed";
-          latest.run.finished_at = this.nowIso();
-          if (latest.run.studio) {
-            latest.run.studio.status = "failed";
-            latest.run.studio.error = msg;
-            latest.run.studio.last_synced_at = this.nowIso();
-          }
-          const step = latest.run.steps[latest.run.current_step_index];
-          if (step) {
-            step.status = "failed";
-            step.summary = msg;
-            step.finished_at = this.nowIso();
-          }
-          this.appendRunEvent(latest, {
-            type: "run_finished",
-            level: "error",
-            message: `Studio 编排失败：${msg}`,
-          });
-          await this.write(latest);
-        } catch (persistErr) {
-          this.logger.error(
-            `failed to persist studio error for ${workOrderId}: ${
-              persistErr instanceof Error ? persistErr.message : String(persistErr)
-            }`,
-          );
-        }
-      }
-    })();
-    this.studioInFlight.set(
-      workOrderId,
-      run.finally(() => {
-        if (this.studioInFlight.get(workOrderId) === run) {
-          this.studioInFlight.delete(workOrderId);
-        }
-      }),
-    );
-  }
-
-  private async applyStudioOutcome(
-    order: WorkOrder,
-    outcome: OrchestratorOutcome,
-    bridgeBaseUrl: string,
+  async resumeForUser(
+    userId: string,
+    id: string,
+    input: unknown = {},
   ): Promise<WorkOrder> {
-    if (!order.run) throw new BadRequestException("run missing");
-    const stamp = this.nowIso();
-    const state = studioStateFromOutcome(outcome, bridgeBaseUrl);
-    order.run.studio = {
-      bridge_run_id: state.bridge_run_id || "",
-      bridge_base_url: state.bridge_base_url || bridgeBaseUrl,
-      current_stage: state.current_stage || "",
-      last_summary: state.last_summary || "",
-      pending_human: Boolean(state.pending_human),
-      dry_run: Boolean(state.dry_run),
-      status: state.status || outcome.kind,
-      error: state.error ?? null,
-      last_synced_at: stamp,
-    };
-
-    const idx = outcome.step_index;
-    const step = order.run.steps[idx];
-    const summary =
-      outcome.kind === "failed"
-        ? outcome.error
-        : "summary" in outcome
-          ? outcome.summary
-          : state.last_summary || "";
-
-    if (step) {
-      step.summary = summary || step.summary;
-      if ("stage_result" in outcome && outcome.stage_result) {
-        step.output = outcome.stage_result.summary || step.output;
-        step.output_title =
-          step.output_title || step.label || outcome.stage_result.stage;
-      }
-    }
-
-    if (outcome.kind === "pending_approval") {
-      order.status = "pending_approval";
-      order.run.current_step_index = idx;
-      if (step) {
-        step.status = "pending_approval";
-        step.started_at = step.started_at || stamp;
-      }
-      this.appendRunEvent(order, {
-        type: "human_input_required",
-        message: `等待人工确认：${step?.label || step?.step_id || outcome.stage}`,
-        step_id: step?.step_id,
-        agent: step?.agent,
-        detail: { stage: outcome.stage },
-      });
-      this.appendRunEvent(order, {
-        type: "bridge_stage",
-        message: summary || `stage ${outcome.stage}`,
-        step_id: step?.step_id,
-        agent: step?.agent,
-      });
-    } else if (outcome.kind === "running") {
-      order.status = "running";
-      order.run.current_step_index = idx;
-      if (step) {
-        step.status = "running";
-        step.started_at = step.started_at || stamp;
-      }
-    } else if (outcome.kind === "completed") {
-      for (const s of order.run.steps) {
-        if (s.status !== "rejected") {
-          s.status = "approved";
-          s.finished_at = s.finished_at || stamp;
-          s.summary = s.summary || "Studio 编排已完成";
-        }
-      }
-      order.run.current_step_index = Math.max(0, order.run.steps.length - 1);
-      order.status = "completed";
-      this.appendRunEvent(order, {
-        type: "run_finished",
-        message: "当前仓流水线完成（Studio orchestrator）",
-        dry_run: state.dry_run,
-      });
-      return this.finishCurrentRepoAndContinue(order);
-    } else if (outcome.kind === "rejected") {
-      order.status = "rejected";
-      order.run.finished_at = stamp;
-      if (step) {
-        step.status = "rejected";
-        step.finished_at = stamp;
-        step.feedback = summary;
-      }
-      this.appendRunEvent(order, {
-        type: "run_finished",
-        level: "warn",
-        message: `运行结束：rejected${summary ? ` · ${summary}` : ""}`,
-      });
-    } else if (outcome.kind === "failed") {
-      order.status = "failed";
-      order.run.finished_at = stamp;
-      if (step) {
-        step.status = "failed";
-        step.finished_at = stamp;
-        step.summary = outcome.error;
-      }
-      this.appendRunEvent(order, {
-        type: "run_finished",
-        level: "error",
-        message: `运行结束：failed · ${outcome.error}`,
-      });
-    }
-
-    return this.write(order);
+    await this.requireWritableWorkOrder(userId, id);
+    return this.resume(id, input);
   }
 
   async decide(id: string, input: unknown): Promise<WorkOrder> {
     const body = WorkOrderDecisionSchema.parse(input);
     const order = await this.get(id);
     if (!order.run) throw new BadRequestException("工单尚未启动流水线");
-    return this.decideStudio(id, body);
+    return this.studioRunner.decide(id, body);
   }
 
   async decideForUser(userId: string, id: string, input: unknown): Promise<WorkOrder> {
@@ -1690,7 +1397,7 @@ export class WorkOrdersService implements OnModuleInit {
    * After one repo's pipeline succeeds: mark it done and start the next
    * Manager-ordered target (or complete the work order).
    */
-  private async finishCurrentRepoAndContinue(order: WorkOrder): Promise<WorkOrder> {
+  async finishCurrentRepoAndContinue(order: WorkOrder): Promise<WorkOrder> {
     const prepared = await this.markCurrentRepoCompleted(order);
     if (prepared.done) return await this.write(prepared.order);
 
@@ -1699,7 +1406,7 @@ export class WorkOrdersService implements OnModuleInit {
     const registered = await this.bridges.pickRegisteredBaseUrl({
       teamId: saved.team_id,
     });
-    return this.startStudioFromDraft(saved, saved, {
+    return this.studioRunner.startFromDraft(saved, saved, {
       agents_md_path: saved.run?.selected_agents_md_path,
       routing_mode: "explicit",
       bridge_base_url: resolveStudioBridgeBase({
@@ -1778,6 +1485,7 @@ export class WorkOrdersService implements OnModuleInit {
           summary: "",
           output: "",
           output_title: "",
+          artifact_paths: [] as string[],
           feedback: "",
         }),
       );
@@ -1788,6 +1496,7 @@ export class WorkOrdersService implements OnModuleInit {
         summary: "",
         output: "",
         output_title: "",
+        artifact_paths: [],
         feedback: "",
         started_at: undefined,
         finished_at: undefined,
@@ -1810,7 +1519,7 @@ export class WorkOrdersService implements OnModuleInit {
     return { order, done: false };
   }
 
-  private async write(order: WorkOrder): Promise<WorkOrder> {
+  async write(order: WorkOrder): Promise<WorkOrder> {
     const stamp = this.nowIso();
     const existing = await this.repo.findOne({ where: { id: order.id } });
     const next = WorkOrderSchema.parse({

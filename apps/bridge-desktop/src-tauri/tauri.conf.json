@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "Agent Studio Bridge",
-        "width": 420,
-        "height": 520,
+        "width": 440,
+        "height": 720,
         "resizable": true,
         "minimizable": true
       }

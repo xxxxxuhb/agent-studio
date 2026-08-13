@@ -31,6 +31,10 @@
             <dt>Name</dt>
             <dd id="meta-name">—</dd>
           </div>
+          <div>
+            <dt>路径</dt>
+            <dd id="meta-paths">—</dd>
+          </div>
           <div class="full">
             <dt>Health</dt>
             <dd id="meta-health-url" class="mono">—</dd>
@@ -44,6 +48,7 @@
             <dd id="meta-detail">—</dd>
           </div>
         </dl>
+        <p id="path-hints" class="hints" hidden></p>
       </section>
 
       <div class="actions">
@@ -51,7 +56,17 @@
         <button type="button" id="btn-stop">停止</button>
         <button type="button" id="btn-refresh">刷新</button>
         <button type="button" id="btn-open-cwd">打开 .env 目录</button>
+        <button type="button" id="btn-reset-paths">重置路径</button>
+        <button type="button" id="btn-clear-logs">清空日志</button>
       </div>
+
+      <section class="log-panel" aria-label="Bridge 日志">
+        <div class="log-head">
+          <span class="label">日志</span>
+          <span class="log-sub">stdout / stderr · 最近约 400 行</span>
+        </div>
+        <pre id="log-view" class="log-view"></pre>
+      </section>
 
       <p id="error" class="error" hidden></p>
       <p class="hint">

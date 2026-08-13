@@ -198,6 +198,8 @@ export const WorkOrderRunStepSchema = z.object({
   /** Full agent artifact (markdown) shown on work-order detail */
   output: z.string().default(""),
   output_title: z.string().optional().default(""),
+  /** Relative paths reported by Bridge stages (snapshot survives Bridge gc). */
+  artifact_paths: z.array(z.string()).default([]),
   feedback: z.string().default(""),
   started_at: z.string().optional(),
   finished_at: z.string().optional(),
@@ -214,11 +216,28 @@ export const WorkOrderGitSchema = z.object({
   commit_sha: z.string().optional().default(""),
   commit_message: z.string().optional().default(""),
   pr_url: z.string().optional().default(""),
+  /** Forge commit page (derived from pr_url when possible). */
+  commit_url: z.string().optional().default(""),
   committed_at: z.string().optional(),
   committed_by_step: z.string().optional().default(""),
   note: z.string().optional().default(""),
 });
 export type WorkOrderGit = z.infer<typeof WorkOrderGitSchema>;
+
+/** Derive GitLab/GitHub commit URL from an MR/PR URL + sha. */
+export function forgeCommitUrl(
+  prUrl: string | undefined | null,
+  sha: string | undefined | null,
+): string {
+  const url = (prUrl || "").trim().replace(/[)\].,;]+$/, "");
+  const commit = (sha || "").trim();
+  if (!url || !commit) return "";
+  const gitlab = url.match(/^(https?:\/\/[^?#]+?)\/-\/merge_requests\/\d+\/?$/i);
+  if (gitlab) return `${gitlab[1]}/-/commit/${commit}`;
+  const github = url.match(/^(https?:\/\/github\.com\/[^/]+\/[^/]+)\/pull\/\d+\/?$/i);
+  if (github) return `${github[1]}/commit/${commit}`;
+  return "";
+}
 
 /** Append-only timeline for a work-order run (control-plane audit). */
 export const WorkOrderRunEventSchema = z.object({
@@ -490,6 +509,12 @@ export const WorkOrderRestartSchema = z.object({
 });
 export type WorkOrderRestart = z.infer<typeof WorkOrderRestartSchema>;
 
+/** Resume from failed stage on the same Bridge run (no createRun). */
+export const WorkOrderResumeSchema = z.object({
+  feedback: z.string().optional().default(""),
+});
+export type WorkOrderResume = z.infer<typeof WorkOrderResumeSchema>;
+
 export const WorkOrderDecisionSchema = z.object({
   decision: z.enum(["approve", "reject"]).optional(),
   /** Optional action id (legacy Human Input); overrides decision mapping when set */
@@ -582,10 +607,14 @@ export {
   AuthLoginSchema,
   AuthRegisterSchema,
   AuthLoginResponseSchema,
+  AuthProfileUpdateSchema,
+  AuthProfileUpdateResponseSchema,
   type AuthUserPublic,
   type AuthLogin,
   type AuthRegister,
   type AuthLoginResponse,
+  type AuthProfileUpdate,
+  type AuthProfileUpdateResponse,
 } from "./auth";
 
 export {
@@ -622,12 +651,14 @@ export {
 
 export {
   BridgeStatusSchema,
+  BridgeLinkTypeSchema,
   BridgeExecutorSchema,
   BridgeRegisterSchema,
   BridgeHeartbeatSchema,
   BridgeAuthModeSchema,
   BridgePrepareSchema,
   type BridgeStatus,
+  type BridgeLinkType,
   type BridgeExecutor,
   type BridgeRegister,
   type BridgeHeartbeat,

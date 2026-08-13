@@ -7,6 +7,12 @@ Recommended for all local setups. Host port **3316** → container **3306**.
 From monorepo root:
 
 ```bash
+./scripts/bootstrap-dev.sh
+# or:
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml ps
+
+# Standalone (same MySQL service)
 docker compose -f deploy/mysql/docker-compose.yml up -d
 docker compose -f deploy/mysql/docker-compose.yml ps
 ```
@@ -35,7 +41,8 @@ STUDIO_MYSQL_DATABASE=agent_studio
 
 ## Notes for the agent
 
-- Prefer `deploy/mysql/docker-compose.yml`.
+- Prefer `deploy/docker-compose.yml` (or standalone `deploy/mysql/docker-compose.yml`).
+- Do **not** start `deploy/gitlab` — removed; forge is external.
 - Do not require host MySQL on 3306.
 - After schema apply, restart Studio API so bootstrap can create admin + default team.
-- Backup / multi-instance: see `apps/studio-api/sql/README.md` (mysqldump + live file dirs; share one MySQL, do not treat legacy YAML dirs as runtime).
+- Backup / multi-instance: see `apps/studio-api/sql/README.md`.

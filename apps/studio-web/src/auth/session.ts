@@ -47,6 +47,12 @@ export function getSelectedTeam(): StoredTeam | null {
 export function setSession(token: string, user: StoredUser) {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new CustomEvent("studio-user-updated", { detail: user }));
+}
+
+export function updateStoredUser(user: StoredUser) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new CustomEvent("studio-user-updated", { detail: user }));
 }
 
 export function setSelectedTeam(team: StoredTeam | null) {

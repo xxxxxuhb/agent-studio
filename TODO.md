@@ -2,175 +2,135 @@
 
 按优先级：P0 可远程交付 → P1 稳态运维 → P2 扩展能力。已完成项见文末。
 
+分支：`v2`（Studio orchestrator 直连 Bridge；控制面已去掉 Dify 执行路径）。
+
 ## P0 — 可远程交付
 
 ### Cloud Bridge（remote executor host）
 
-- [x] Bridge 跑在云 VM / 容器，`BRIDGE_PUBLIC_URL` 对 Studio + Dify 可达；Bridge WS 回连 Studio。
-- [x] 仓库工作区归 Bridge 主机（`POST /workspace/ensure` + `BRIDGE_REPOS_DIR`；工单 routing 不再依赖 Studio 本机 `ensureCloned` 路径）。
-- [x] Ops：云 `.env`（`CURSOR_API_KEY` / git SSH bot / `GITLAB_TOKEN` / `STUDIO_BRIDGE_TOKEN`）；文档写清局域网 vs 公网 URL + TLS 反代（见 `docs/环境配置指南.md` §3.4）。
-
-Notes (2026-08-11): Cursor/Trae/Qoder 仍是机上 Agent；「云 Bridge」= 远程执行机，不是把 Cursor 嵌进云端 Dify Agent。
+- [x] Bridge 跑在云 VM / 容器，`BRIDGE_PUBLIC_URL` 对 Studio 可达；Bridge WS 回连 Studio。
+- [x] 仓库工作区归 Bridge 主机（`POST /workspace/ensure` + `BRIDGE_REPOS_DIR`）。
+- [x] Ops：云 `.env` + 文档（`docs/环境配置指南.md` §3.4）。
 
 ### 存储收尾（YAML → MySQL）
 
-- [x] 流水线 / 数字人 / Bridge 登记迁 MySQL（一次性 YAML 导入，源文件保留）。
-- [x] 多实例 / 备份策略与 YAML 双轨脱钩（服务去掉 `data/{pipelines,agents,bridges}` 运行时路径；`sql/README.md` 写清 mysqldump + 仍落盘目录）。
+- [x] 流水线 / 数字人 / Bridge / 项目 / 工单迁 MySQL。
+- [x] 运行时与 YAML 双轨脱钩（备份说明见 `apps/studio-api/sql/README.md`）。
 
 ### 密钥与租户边界
 
-- [x] Dify / Git 凭证按团队隔离（`data/team-secrets/{teamId}.yaml`；解析优先团队，回退安装级）。
-- [x] 团队级密钥轮换与最小权限文档（[`docs/团队密钥与轮换.md`](docs/团队密钥与轮换.md)）。
+- [x] 团队隔离（成员角色 + 团队资源）；设置 / Git overlay（`StudioConfig` / 原 team-secrets 路径按现实现为准）。
+- [x] 团队密钥轮换文档（[`docs/团队密钥与轮换.md`](docs/团队密钥与轮换.md)；已按 v2 去掉 Dify 主路径）。
 
 ## P1 — 稳态运维
 
-### Studio 自管编排 + Bridge（已去掉 Dify 执行路径）
+### Studio 自管编排 + Bridge
 
-- [x] **独立包 `packages/orchestrator`（或同名）**：编排器**不进** `studio-api` 业务大服务；Studio 只做鉴权、工单持久化、WebSocket 推送，通过包 API / 薄适配层驱动。
-- [x] 包职责：按流水线步骤顺序调 Bridge（ensure → select → stages）；管理 run 状态机（running / pending_approval / failed / completed）；Human Input 暂停与 approve/reject/feedback；失败 resume。
-- [x] **Human Input**：阶段 `pendingHumanApproval` → 通知宿主暂停 → 宿主（Studio）给人审 → 回传 decision → 包继续下一 stage（去掉 Dify `form_token` / syncDify / Console DSL）。
-- [x] **执行器**：仅 `executor=studio`（旧 `dify`/`local` 读库时 coerce）；Nest `src/dify` 模块与 Web Dify 面板已删。
-- [x] **流水线**：Studio/MySQL 存步骤定义；包只消费契约（放 `agent-schema`）；不再导入 Dify DSL。
-- [ ] **减负**：Compose profile 只需 MySQL + Studio + Bridge（+ 可选 GitLab）。
-- [x] 删除仓库内 `deploy/dify`（`v2`）。
-- [x] 进程形态二选一写清：先 **库内嵌**（API 进程 `import @agent-studio/orchestrator`），需要再拆独立 worker 进程。
-- [ ] （后置）可视化拖拽改图。
-- [ ] 阶段中断续跑（resume）仍待做。
+- [x] 独立包 `packages/orchestrator`；Studio 薄适配（`studio-orchestrator.adapter.ts`）。
+- [x] start / decide / Human Input 暂停；仅 `executor=studio`；Nest `src/dify` 与 Web Dify 面板已删。
+- [x] 流水线步骤存 MySQL；包消费 `agent-schema` 契约。
+- [x] 库内嵌进程形态（API `import @agent-studio/orchestrator`）。
+- [x] 流水线可视化编辑（`apps/studio-web/src/pipeline-flow/`）。
+- [x] 包内 `resumeStudioRun` + adapter `runStudioResume` + 单测。
+- [x] **产品续跑**：`POST /work-orders/:id/resume` + Web「从失败阶段续跑」（复用 `bridge_run_id`；失效则回退「重新执行」）。
+- [x] **减负 Compose**：仅 MySQL（`deploy/docker-compose.yml` + `scripts/bootstrap-dev.sh`）；**不内置 GitLab**；文档 L0–L2。
+- [x] 清理本机残留：`deploy/dify/`、`deploy/gitlab/` 已不在仓库；`.gitignore` 忽略若本地再生成。
+- [x] 文档扫尾：去掉过时 Dify / 内置 GitLab 主路径；产物目录名 `docs/dify-runs` 暂保留（可选改名）。
 
-Notes (2026-08-12): `v2` 分支已剥离 Dify 执行与控制面：`StudioConfig` 承接 `bridge_base_url` / `agents_md_path` / Git；工单 start/restart/decide 仅走 orchestrator；产物目录名 `docs/dify-runs` 暂保留。
+Notes (2026-08-13): 编排主路径已通；本地栈只起 MySQL；Forge 用外部 GitLab/GitHub。
 
 ### 工单可靠性
 
-- [x] Dify Human Input / `form_token` 丢失与恢复路径加固（不误清 token、恢复失败可观测、过期重拉、decide 重试、sync 串行）。
-- [x] Bridge 掉线 / `busy` / 阶段失败后的重试与可恢复状态机（预检、Dify URL 对齐、503 admit、重连保 busy、失败标 retryable +「重新执行」；阶段中断续跑仍靠重启）。
-- [x] Studio run_id ↔ Dify ↔ Bridge stage 统一可检索（失败原因、日志串联）。
-- [ ] **阶段中断续跑（resume）**：见上「自管编排」；长跑中断后从失败 stage 续跑。
+- [x] Bridge busy/offline、排队 admit、失败可「重新执行」。
+- [x] run 日志关联 / trace / 深链。
+- [x] 阶段中断续跑产品化（`resume` API + UI）。
 
 ### 测试与 CI
 
-- [x] 鉴权 + 团队隔离 API 回归。
-- [x] 工单启动路由（选仓 / Bridge 可达）测试。
-- [x] commit-record / MR 解析 + Bridge HTTP 鉴权回归（在现有少量 Bridge 单测之上加厚）。
-- [ ] **E2E 黄金路径**：登录 → 开工单 → 审批 → 见产物（CI 可用 mock Bridge）。
+- [x] 鉴权 / 团队隔离 / routing / Bridge 单测加厚。
+- [x] **E2E 黄金路径**：`packages/orchestrator` `golden-path.test.ts`（mock Bridge HTTP：start → 审批 → completed + artifacts）。
 
-### 执行器调度
+### 执行器调度 / 可观测
 
-- [x] 多 Bridge 池：按团队选机、`busy` 排队（优先 idle、禁止跨团队回落；全忙时 `queued`，Bridge 空闲后自动 admit）。
+- [x] 多 Bridge 池选机与 busy 排队。
+- [x] Bridge `gc`；run artifacts API + Web「产物」Tab。
+- [x] 终态产物**路径**快照入库（`step.artifact_paths`）；MR/sha 外链（`commit_url` / `forgeCommitUrl`）。内容级 blob 入库仍可选后置。
 
-### 可观测与清理
+### 一键 Compose（减负本地栈）
 
-- [x] run 级可观测补强（trace / 检索：ID 精确 lookup、双向深链、运行轨迹）。
-- [x] 仓库工作副本与 run 产物磁盘清理策略（Bridge `gc` dry-run 默认；清 prompt / 终态 `docs/dify-runs` / 过期 `runs.json`）。
-
-### Web 查看 run 产物
-
-- [x] Bridge：`GET /runs/:id/artifacts` 列表 + `GET /runs/:id/artifacts/:name` 读正文；仅允许 `docs/dify-runs/{run_id}/`（或 run 登记路径）白名单，防路径穿越。
-- [x] Studio API 代理（团队鉴权）+ Web 在 RunLogs / 工单详情加「产物」Tab（列表 + markdown 预览）。
-- [ ] （可选）终态快照入库 / 落盘，Bridge 下线仍可回看。
-- [ ] （可选）有 MR/sha 时外链 GitLab blob。
-
-Notes (2026-08-11): 产物在 Bridge 机 `docs/dify-runs/{run_id}/*.md`；现 RunLogs 是控制面时间线，不直接读仓库文件。主路径走 Bridge 读 API，不做 Studio 本机扫盘。
-
-### 一键 Compose profile（减负本地栈）
-
-- [ ] 统一 `deploy/` Compose **profile**：如 `core`（仅 MySQL）/ `control`（+ 可容器化控制面）/ `full`（+ Dify + GitLab）；避免换机默认拉全套。
-- [ ] `scripts/bootstrap-dev.sh`（或等价）：拷 `.env.example`、按 profile `up -d`、等 health、跑 `init.sql`、打印下一步（Bridge/Studio 本机进程）。
-- [ ] 文档与 Skill 写清 L0–L3 / profile 对应关系；GitLab、Dify 标为 optional，完整本地闭环才用 `full`。
-- [ ] **共享远程控制面作为默认开发方式**：文档推荐一台常开 Studio+Dify+GitLab，本机只跑 Bridge / `bridge-desktop`（换机成本优先砍这里）。
-
-Notes (2026-08-11): 换机最重是 Dify/GitLab 镜像与初始化；profile + bootstrap 减「忘步骤 / 配错端口」，共享远程栈仍是更瘦的日常路径。
+- [x] `deploy/`：**仅 MySQL**（已去掉内置 GitLab）。
+- [x] `scripts/bootstrap-dev.sh`：拷 env、up、health、`init.sql`、提示起 API/Web/Bridge。
+- [x] Skill / 环境指南：默认「共享远程控制面 + 本机 Bridge」；Push/MR 对接外部 Forge。
 
 ### bridge-desktop 打磨
 
-- [ ] 打包安装（macOS/Windows）、仓库/`BRIDGE_REPOS_DIR` 路径探测、日志窗；降低「只会 npm run」门槛。
-- [ ] 与 CLI / `.env` 行为对齐的冒烟说明（启动 → `/health` → Studio `online`）。
+- [x] 路径探测强化（monorepo walk-up / node 常见路径 / 重置路径）、日志窗（stdout/stderr ring）、本机构建说明（未公证）。
+- [x] 冒烟说明：启动 → `/health` → Studio `online`（与 CLI 对齐）。
+- [ ] （后置）Apple 公证 / Windows 签名 / 自动更新。
 
 ## P2 — 扩展（可后置）
 
 ### Bridge 桌面启停（Tauri）
 
-- [x] 用 **Tauri** 做本机执行器托盘/小窗：启动、停止 Bridge；状态看 `/health`（及是否 `online`）。
-- [x] **保留现有命令行启动**（`npm run dev:bridge` / `agent-studio-bridge start`）；App 只是在 CLI 之上的一层，spawn 同一套进程与 `.env`，不替代 CLI。
-- [x] 停止走 SIGINT/SIGTERM（与 Ctrl+C 一致，便于 WS 报 offline）；可选「只退 UI、Bridge 继续跑」。
-- [x] 密钥仍读本机 Bridge `.env`，不进 Tauri 云同步。
-
-Notes (2026-08-11): 面向本地调试与桌面执行机；云 VM 仍用 systemd/Docker，不必强依赖 Tauri。实现见 `apps/bridge-desktop/`，根脚本 `npm run dev:bridge-desktop`。
+- [x] `apps/bridge-desktop/`：启停 Bridge、health、保留 CLI；密钥读本机 `.env`。
 
 ### 移动端独立 App（控制面）
 
-- [ ] 做**独立移动 App**（非仅响应式 Web）：登录 Studio、选团队、工单列表/详情、Human Input 通过/驳回、启动/重新执行、执行器状态、运行日志/产物只读。
-- [ ] 只调现有 Studio API +（可选）Socket.IO；**不在手机上跑 Bridge / Cursor**；执行仍依赖已 online 的远程执行器。
-- [ ] 技术选型待定（RN / Flutter / Tauri Mobile 等）；与桌面 Tauri 启停 App 职责分离（手机遥控控制面，桌面管本机 Bridge 进程）。
-- [ ] 前提：Studio API 对公网/VPN 可达 + HTTPS；推送通知（审批待办）可选后置。
+- [ ] 独立 App：登录 / 团队 / 工单 / 审批 / 执行器状态 / 日志产物只读。
+- [ ] 只调 Studio API（+ 可选 Socket）；不跑 Bridge；API 需公网/VPN + HTTPS。
 
-Notes (2026-08-11): 移动端 = 远程操作台，不是移动版执行器。
-
-### 身份
+### 身份 / 驱动
 
 - [ ] OAuth / SSO
-
-### Agent 驱动
-
-- [ ] `openai` driver（今日占位）；按「无 Cursor 许可」需求决定是否做。
-- [x] Trae / Qoder 安装与鉴权文档压实（`docs/环境配置指南.md` §3.1a + `.env.example` / Bridge·runtime README）。
-
-### Cloud Dify Agent as step executor
-
-- [ ] ~~数字人步骤绑定云端 Dify Agent~~（已从主路径移除；若再做应走独立 executor 插件，不回嵌旧 Workflow。）
-
-Notes: `v2` 已删除控制面 Dify 模块；本项降为可选未来插件。
+- [ ] `openai` driver（占位）；按需再做。
 
 ### 工程债 / 中期优化
 
-- [x] 抽出 work-order routing / dify utils / bridge-git 解析。
-- [ ] 继续拆 `work-orders.service`（sync / decide / start 分模块；服务仍 ~2500 行）。
-- [ ] `team-secrets` 从 YAML 再收一档（MySQL 或 Vault/SOPS），便于多实例与备份。
-- [ ] Bridge Forge HTTP 用 `@gitbeaker` / Octokit 替裸 `fetch` 开 MR（本地 git commit/push 仍自管）。
+- [x] 继续拆 `work-orders.service`：抽出 `WorkOrderStudioRunner`（start/decide/resume/progress/outcome）；主服务 ~1.5k 行。
+- [x] 设置/密钥叙事清理：SQL README / Skill env 去掉 Dify secrets 主路径；team-secrets 仍 YAML `0600`（MySQL/Vault 后置）。
+- [x] Bridge Forge HTTP：`@gitbeaker/rest` + `@octokit/rest`（`packages/bridge/src/forgeHttp.ts`）。
+- [ ] （可选后置）orchestrator 拆独立 worker 进程。
+- [x] （取消）云端 Dify Agent / Workflow 回嵌——主路径已移除；若再做应为独立插件，不回旧模块。
 
 ---
 
 ## Done
 
+### Local stack profiles + docs scrub (2026-08-13)
+
+- [x] `deploy/docker-compose.yml`（MySQL）+ `scripts/bootstrap-dev.sh`；**移除内置 GitLab**。
+- [x] 环境指南 L0–L2；`docs/对接外部Git.md`；Skill / 问题记录去掉 Dify/内置 GitLab。
+- [x] orchestrator golden-path（mock Bridge HTTP）；bridge-desktop 冒烟说明。
+
+### bridge-desktop + observability (2026-08-13)
+
+- [x] 路径探测 / 日志窗 / 本机构建说明。
+- [x] `artifact_paths` 快照 + GitLab/GitHub `commit_url` 外链。
+
+### Engineering debt pass (2026-08-13)
+
+- [x] `WorkOrderStudioRunner` 抽出 studio start/decide/resume。
+- [x] Bridge MR/PR 走 Octokit + Gitbeaker；密钥文档去 Dify 主路径。
+
+### Studio orchestrator（2026-08-12 → v2）
+
+- [x] `packages/orchestrator`：start / decide / resume（包层）+ Bridge client + stage-map。
+- [x] 工单默认 `executor=studio`；去掉控制面 Dify 模块与导入 DSL。
+- [x] `StudioConfig` 承接 bridge / agents_md / Git；部署文档去掉 Dify Compose。
+- [x] 流水线可视化 `pipeline-flow`。
+
 ### Pipelines / humans / bridges → MySQL (2026-08-11)
 
-- [x] 表 `digital_humans` / `pipelines` / `bridges`；服务改 TypeORM；bootstrap 一次性 YAML 导入。
-- [x] Studio 运行时不再读写这三类 YAML（源文件保留供回滚）。
-- [x] 去掉服务侧 `getDataDir` / 死 YAML 路径；备份与多实例说明见 `apps/studio-api/sql/README.md`。
+- [x] TypeORM + bootstrap YAML 一次性导入；运行时不读写这三类 YAML。
 
 ### Cloud Bridge workspace ownership (2026-08-11)
 
-- [x] Bridge `POST /workspace/ensure` + `BRIDGE_REPOS_DIR`；工单 routing / restart reuse 用 Bridge 路径。
-- [x] Studio 优先注册执行器 `base_url`；`host.docker.internal` 仅本机共址改写。
-- [x] 文档：`docs/环境配置指南.md` §3.4 + skill Remote Bridge。
+- [x] `POST /workspace/ensure`；工单 routing 用 Bridge 路径；文档 §3.4。
 
 ### Auth / teams / multi-tenancy
 
-- [x] **登录与系统权限**：JWT 登录；全局 AuthGuard（health / login / register / Bridge WS 除外）。
-- [x] **团队管理**：团队 → 项目；团队间隔离；角色 owner / member / viewer。
-- [x] **MySQL**：users / teams / team_members / projects；空库 bootstrap admin + 默认团队；YAML 项目一次性迁入。
-- [x] 流水线 / 数字人 / Bridge / 设置按团队隔离；viewer 只读；Dify/Console/Git 可按团队 overlay（见 `team-secrets`）。
-- [x] 工单本体迁 MySQL；viewer 只读。
+- [x] JWT、团队、角色、工单/项目 MySQL、团队隔离。
 
-### Bridge MR / commit-record parsing
+### Bridge MR / git bot / hardening / UX (2026-08-10)
 
-- [x] `parseCommitRecord` 支持 markdown **table**（`| field | value |`），不只 `- field: value`。  
-  Fixed 2026-08-10. Backfilled backend MR: http://localhost:8929/root/dify-pipeline-backend/-/merge_requests/1 (run `64c74bb8`).
-
-### Git bot identity + SSH remotes
-
-- [x] Bridge: `BRIDGE_GIT_AUTHOR_*` + `BRIDGE_GIT_SSH_KEY` → force commit author；origin 改写 SSH；MR 仍用 bot `GITLAB_TOKEN`。
-- [x] Studio `ensureCloned` prefers SSH when key / `STUDIO_GIT_PREFER_SSH` is set.
-- [x] Ops: dedicated GitLab user `agent-studio-bot` + bot PAT；SSH key 离 root；demo 仓 Maintainer。
-
-### Hardening (2026-08-10)
-
-- [x] Bridge HTTP auth（`BRIDGE_HTTP_TOKEN` / `STUDIO_BRIDGE_TOKEN`）；`/health` 公开。
-- [x] Minimal CI（typecheck + bridge tests）。
-- [x] Dify secrets 拆到 `data/dify-secrets.yaml`（0600）；优先 `DIFY_*` env。
-
-### UX polish (2026-08-10)
-
-- [x] 数字人 Dify Agent 字段标明 metadata / 未执行。
-- [x] 工单 Human Input 自动 sync `form_token`。
-- [x] README 链到 `docs/` + `skills/local-stack-setup`。
-- [x] 抽出 work-order routing + dify utils（进一步拆分见 P2）。
+- [x] commit-record table 解析；SSH bot + PAT 开 MR；Bridge HTTP auth；最小 CI；Human Input 自动 sync（历史 Dify 路径）；README / skill 链接。

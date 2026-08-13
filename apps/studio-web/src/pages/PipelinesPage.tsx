@@ -10,7 +10,6 @@ import {
   Row,
   Select,
   Space,
-  Steps,
   Switch,
   Tag,
   Typography,
@@ -22,13 +21,17 @@ import {
   PlusOutlined,
   ReloadOutlined,
   ApartmentOutlined,
-  RobotOutlined,
+  NodeIndexOutlined,
 } from "@ant-design/icons";
 import type { DigitalHuman, PipelineCreate, PipelinePublic, PipelineStep } from "@agent-studio/agent-schema";
 import { digitalHumansApi } from "../api/digital-humans";
 import { pipelinesApi } from "../api/pipelines";
 import { getSelectedTeam } from "../auth/session";
 import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
+import { PipelineFlowEditor } from "../pipeline-flow/PipelineFlowEditor";
+import { PipelineFlowModal } from "../pipeline-flow/PipelineFlowModal";
+import { PipelineFlowView } from "../pipeline-flow/PipelineFlowView";
+import { toFlowStepsFromPipeline } from "../pipeline-flow/buildPipelineFlow";
 
 type EditorValues = {
   id: string;
@@ -71,6 +74,7 @@ export function PipelinesPage() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [composePrompt, setComposePrompt] = useState("");
   const [composeLoading, setComposeLoading] = useState(false);
+  const [flowOpen, setFlowOpen] = useState(false);
   const [form] = Form.useForm<EditorValues>();
 
   const selected = useMemo(
@@ -328,6 +332,12 @@ export function PipelinesPage() {
             extra={
               selected ? (
                 <Space>
+                  <Button
+                    icon={<NodeIndexOutlined />}
+                    onClick={() => setFlowOpen(true)}
+                  >
+                    可视化
+                  </Button>
                   <Switch
                     checkedChildren="启用"
                     unCheckedChildren="停用"
@@ -338,7 +348,7 @@ export function PipelinesPage() {
                     }}
                   />
                   <Button icon={<EditOutlined />} onClick={() => openEdit(selected)}>
-                    编辑
+                    可视化编排
                   </Button>
                   <Button
                     danger
@@ -384,38 +394,24 @@ export function PipelinesPage() {
                     {selected.source.nl_prompt}
                   </Card>
                 ) : null}
-                <Steps
-                  direction="vertical"
-                  size="small"
-                  items={selected.steps.map((s) => ({
-                    title: s.label || s.id,
-                    description: (
-                      <Space direction="vertical" size={0}>
-                        <span>
-                          <RobotOutlined /> {s.agent}
-                          {(() => {
-                            const h = humans.find((x) => x.id === s.agent);
-                            const tip = h?.dify?.agent_id || h?.dify?.agent_name;
-                            return tip ? (
-                              <Typography.Text type="secondary">
-                                {" "}
-                                → Bridge stage {tip}
-                              </Typography.Text>
-                            ) : null;
-                          })()}
-                        </span>
-                        <Typography.Text type="secondary">
-                          人工确认：{s.human_approval ? "是" : "否"}；驳回：
-                          {s.on_reject}
-                          {s.on_reject === "goto" && s.reject_goto
-                            ? ` → ${s.reject_goto}`
-                            : ""}
-                        </Typography.Text>
-                      </Space>
-                    ),
-                    status: "wait" as const,
-                  }))}
-                />
+                <div className="pipeline-flow-preview">
+                  <div className="pipeline-flow-preview__head">
+                    <Typography.Text strong>流程预览</Typography.Text>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<NodeIndexOutlined />}
+                      onClick={() => setFlowOpen(true)}
+                    >
+                      打开可视化
+                    </Button>
+                  </div>
+                  <PipelineFlowView
+                    steps={toFlowStepsFromPipeline(selected.steps)}
+                    height={320}
+                    showMiniMap={false}
+                  />
+                </div>
               </Space>
             )}
           </Card>
@@ -423,17 +419,20 @@ export function PipelinesPage() {
       </div>
 
       <Modal
-        title={editingId ? `编辑 ${editingId}` : "新建流水线"}
+        title={editingId ? `可视化编排 · ${editingId}` : "可视化编排 · 新建流水线"}
         open={editorOpen}
         onCancel={() => setEditorOpen(false)}
         onOk={() => void saveEditor()}
-        width={820}
+        width="92vw"
+        style={{ top: 16 }}
         destroyOnHidden
         okText="保存"
+        className="pipeline-flow-editor-modal"
+        styles={{ body: { maxHeight: "calc(100vh - 140px)", overflow: "auto" } }}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 name="id"
                 label="ID"
@@ -445,128 +444,55 @@ export function PipelinesPage() {
                 <Input disabled={Boolean(editingId)} placeholder="full-delivery" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="name" label="名称" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={24}>
-              <Form.Item name="description" label="描述">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
+            <Col span={4}>
               <Form.Item name="tags" label="标签（逗号分隔）">
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={4}>
               <Form.Item name="enabled" label="启用" valuePropName="checked">
                 <Switch />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item name="description" label="描述">
+                <Input.TextArea rows={1} />
+              </Form.Item>
+            </Col>
           </Row>
 
-          <Typography.Title level={5}>步骤</Typography.Title>
-          <Form.List name="steps">
-            {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: "100%" }} size="middle">
-                {fields.map((field, index) => (
-                  <Card
-                    key={field.key}
-                    size="small"
-                    title={`步骤 ${index + 1}`}
-                    extra={
-                      fields.length > 1 ? (
-                        <Button type="link" danger onClick={() => remove(field.name)}>
-                          删除
-                        </Button>
-                      ) : null
-                    }
-                  >
-                    <Row gutter={12}>
-                      <Col span={8}>
-                        <Form.Item
-                          {...field}
-                          name={[field.name, "id"]}
-                          label="步骤 ID"
-                          rules={[{ required: true }]}
-                        >
-                          <Input placeholder="dev" />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item
-                          {...field}
-                          name={[field.name, "agent"]}
-                          label="数字人"
-                          rules={[{ required: true }]}
-                        >
-                          <Select options={agentOptions} showSearch optionFilterProp="label" />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item {...field} name={[field.name, "label"]} label="显示名">
-                          <Input />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item
-                          {...field}
-                          name={[field.name, "human_approval"]}
-                          label="人工确认"
-                          valuePropName="checked"
-                        >
-                          <Switch />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item
-                          {...field}
-                          name={[field.name, "on_reject"]}
-                          label="驳回策略"
-                          initialValue="end"
-                        >
-                          <Select
-                            options={[
-                              { value: "end", label: "结束" },
-                              { value: "retry_step", label: "重试本步" },
-                              { value: "goto", label: "跳转" },
-                            ]}
-                          />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item
-                          {...field}
-                          name={[field.name, "reject_goto"]}
-                          label="跳转步骤 ID"
-                        >
-                          <Input placeholder="dev" />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                  </Card>
-                ))}
-                <Button
-                  type="dashed"
-                  block
-                  icon={<PlusOutlined />}
-                  onClick={() =>
-                    add({
-                      id: `step_${fields.length + 1}`,
-                      agent: humans[0]?.id,
-                      label: "",
-                      human_approval: true,
-                      on_reject: "end",
-                    })
+          <Form.Item
+            name="steps"
+            label="流程编排"
+            rules={[
+              { required: true, message: "至少添加一个步骤" },
+              {
+                validator: async (_, steps: EditorValues["steps"]) => {
+                  if (!steps?.length) throw new Error("至少添加一个步骤");
+                  const ids = steps.map((s) => s.id?.trim()).filter(Boolean);
+                  if (ids.length !== steps.length) {
+                    throw new Error("步骤 ID 不能为空");
                   }
-                >
-                  添加步骤
-                </Button>
-              </Space>
-            )}
-          </Form.List>
+                  if (new Set(ids).size !== ids.length) {
+                    throw new Error("步骤 ID 不能重复");
+                  }
+                  for (const s of steps) {
+                    if (!s.agent) throw new Error(`步骤 ${s.id} 未选择数字人`);
+                    if (s.on_reject === "goto" && !s.reject_goto) {
+                      throw new Error(`步骤 ${s.id} 的驳回跳转目标未设置`);
+                    }
+                  }
+                },
+              },
+            ]}
+          >
+            <PipelineFlowEditor agentOptions={agentOptions} height={440} />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -611,6 +537,13 @@ export function PipelinesPage() {
           placeholder="描述你想要的流水线…"
         />
       </Modal>
+
+      <PipelineFlowModal
+        open={flowOpen}
+        onClose={() => setFlowOpen(false)}
+        title={selected ? `流程可视化 · ${selected.name}` : "流程可视化"}
+        steps={selected ? toFlowStepsFromPipeline(selected.steps) : []}
+      />
     </div>
   );
 }

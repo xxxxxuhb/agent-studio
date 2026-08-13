@@ -76,6 +76,15 @@ export class WorkOrdersController {
     return this.workOrders.restartForUser(user.id, id, body);
   }
 
+  @Post("work-orders/:id/resume")
+  resume(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.workOrders.resumeForUser(user.id, id, body);
+  }
+
   @Post("work-orders/:id/run-step")
   async runStep(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     await this.workOrders.requireWritableWorkOrder(user.id, id);

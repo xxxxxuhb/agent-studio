@@ -106,6 +106,18 @@ export type ApplyDecisionInput = {
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
 };
 
+/** Resume a failed stage on an existing Bridge run (no createRun). */
+export type ResumeStudioRunInput = {
+  bridge: BridgeClient;
+  steps: OrchestratorStep[];
+  agents: OrchestratorAgentLookup;
+  state: StudioRunState;
+  current_step_index: number;
+  feedback?: string;
+  auto_approve?: boolean;
+  onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
+};
+
 export type OrchestratorOutcome =
   | {
       kind: "pending_approval";

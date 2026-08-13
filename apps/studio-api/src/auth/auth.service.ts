@@ -13,7 +13,9 @@ import { Repository } from "typeorm";
 import {
   AuthLoginSchema,
   AuthRegisterSchema,
+  AuthProfileUpdateSchema,
   type AuthLoginResponse,
+  type AuthProfileUpdateResponse,
   type AuthUserPublic,
 } from "@agent-studio/agent-schema";
 import { UserEntity } from "./entities/user.entity";
@@ -117,6 +119,47 @@ export class AuthService {
     const user = await this.findById(userId);
     if (!user) throw new UnauthorizedException("user not found");
     return this.toPublic(user);
+  }
+
+  async updateProfile(
+    userId: string,
+    input: unknown,
+  ): Promise<AuthProfileUpdateResponse> {
+    const body = AuthProfileUpdateSchema.parse(input);
+    const user = await this.findById(userId);
+    if (!user) throw new UnauthorizedException("user not found");
+
+    let touched = false;
+    if (body.display_name !== undefined) {
+      const name = body.display_name.trim();
+      user.display_name = name || user.username;
+      touched = true;
+    }
+
+    if (body.new_password) {
+      const ok = await bcrypt.compare(
+        body.current_password || "",
+        user.password_hash,
+      );
+      if (!ok) {
+        throw new BadRequestException("当前密码不正确");
+      }
+      if (body.new_password === body.current_password) {
+        throw new BadRequestException("新密码不能与当前密码相同");
+      }
+      user.password_hash = await bcrypt.hash(body.new_password, 10);
+      touched = true;
+    }
+
+    if (!touched) {
+      throw new BadRequestException("没有可更新的字段");
+    }
+
+    const saved = await this.users.save(user);
+    return {
+      user: this.toPublic(saved),
+      token: this.signToken(saved),
+    };
   }
 
   async assertAdmin(userId: string): Promise<UserEntity> {

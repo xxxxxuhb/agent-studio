@@ -51,10 +51,43 @@ npm run tauri:dev
 
 **不要**同时用 CLI 与桌面 App 对同一 `BRIDGE_PORT` 双开。
 
-## 构建（本机）
+## 冒烟（与 CLI 对齐）
+
+1. 先保证 `apps/studio-bridge/.env` 存在，且 `STUDIO_URL` / `STUDIO_BRIDGE_TOKEN` 与 API 一致。
+2. 启动桌面 App（`npm run dev:bridge-desktop`）→ 点「启动 Bridge」。
+3. 本机检查：
 
 ```bash
-npm run build:bridge-desktop
+curl -sS http://127.0.0.1:8787/health
 ```
 
-v1 不做公证 / 安装包分发流水线。
+应返回 JSON（含 status / name 等）。
+
+4. 打开 Studio Web → **执行器**：对应 Bridge 应显示 **online**（需 API 已起、token 一致、Bridge 已 WS 注册）。
+5. （可选）开一张测试工单「开始流水线」，确认 live 事件能刷出。
+
+等价 CLI：`npm run dev:bridge` 后重复步骤 3–4。
+
+路径探测：窗口会显示 `node✓ / bin✓ / cwd✓`；异常时点「重置路径」或看黄色提示。日志区捕获本 App 拉起的 Bridge stdout/stderr。
+
+## 构建 / 本机安装包
+
+开发前先编 Bridge：
+
+```bash
+npm run build -w @agent-studio/bridge
+npm run build:bridge-desktop
+# 或：cd apps/bridge-desktop && npm run tauri:build
+```
+
+产物（未公证，仅本机试装）：
+
+| 平台 | 典型输出 |
+|------|----------|
+| macOS | `apps/bridge-desktop/src-tauri/target/release/bundle/dmg/` · `macos/*.app` |
+| Windows | `…/bundle/msi/` · `nsis/` |
+| Linux | `…/bundle/deb/` · `appimage/` |
+
+可选环境变量：`BRIDGE_DESKTOP_NODE=/绝对路径/node`（nvm/fnm 探测失败时）。
+
+v1 **不做** Apple 公证 / Windows 代码签名 / 自动更新流水线；分发给同事时自行信任本机构建。

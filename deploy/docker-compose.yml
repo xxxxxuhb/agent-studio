@@ -1,0 +1,16 @@
+# Agent Studio local dependencies
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+#   # or: ./scripts/bootstrap-dev.sh
+#
+# MySQL only. GitLab / GitHub are external — configure Bridge env to your forge.
+# No Dify — Studio orchestrator talks to Bridge directly (v2).
+
+services:
+  mysql:
+    extends:
+      file: ./mysql/docker-compose.yml
+      service: mysql
+
+volumes:
+  agent_studio_mysql_data:

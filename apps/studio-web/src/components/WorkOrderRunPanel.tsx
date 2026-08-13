@@ -18,19 +18,27 @@ import {
   CloseOutlined,
   CommentOutlined,
   ExpandOutlined,
+  NodeIndexOutlined,
   ProfileOutlined,
   AppstoreOutlined,
 } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import type { WorkOrder, WorkOrderRunStep } from "@agent-studio/agent-schema";
+import { forgeCommitUrl } from "@agent-studio/agent-schema";
 import { AgentOutputView } from "./AgentOutputView";
 import { RunArtifactsPanel } from "./RunArtifactsPanel";
 import {
   ClarificationChecklist,
   hasOpenQuestions,
 } from "./ClarificationChecklist";
+import {
+  ArtifactDocModal,
+  LiveEventMessage,
+} from "./LiveEventMessage";
 import { MarkdownBody } from "./MarkdownBody";
 import { WorkOrderAgentChat } from "./WorkOrderAgentChat";
+import { PipelineFlowModal } from "../pipeline-flow/PipelineFlowModal";
+import { toFlowStepsFromRun } from "../pipeline-flow/buildPipelineFlow";
 import {
   STATUS_LABEL,
   STEP_STATUS_LABEL,
@@ -47,6 +55,8 @@ type Props = {
     feedbackOverride?: string,
   ) => void;
   onRestart?: () => void;
+  /** Resume failed stage on same Bridge run (when bridge_run_id present). */
+  onResume?: () => void;
   onOrderUpdate?: (order: WorkOrder) => void;
 };
 
@@ -97,10 +107,10 @@ export function describeLegacyRunAlert(
         ? "编排失败（疑似 Bridge/网络瞬时）"
         : "编排失败",
       hint: transientBridge
-        ? "常见原因：Bridge 未启动、掉线或返回 503。本次 run 已结束，修好后点「重新执行」（可复用选仓）。"
+        ? "常见原因：Bridge 未启动、掉线或返回 503。修好后可先「从失败阶段续跑」；若 Bridge run 已失效再用「重新执行」。"
         : err
-          ? "本次运行已结束。修好问题后点「重新执行」。"
-          : "本次运行已结束。请查看运行日志后点「重新执行」。",
+          ? "本次运行已结束。可「从失败阶段续跑」，或「重新执行」开新一轮。"
+          : "本次运行已结束。可「从失败阶段续跑」，或「重新执行」。",
       offerRestart: true,
     };
   }
@@ -170,11 +180,14 @@ function WorkOrderRunPanelBody({
   onFeedbackChange,
   onDecide,
   onRestart,
+  onResume,
   onOrderUpdate,
 }: Props) {
   const [chatOpen, setChatOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [outputOpen, setOutputOpen] = useState(false);
+  const [flowOpen, setFlowOpen] = useState(false);
+  const [docPath, setDocPath] = useState<string | null>(null);
   const run = order.run!;
 
   const isStudio = run.executor === "studio" || !run.executor;
@@ -188,6 +201,8 @@ function WorkOrderRunPanelBody({
   const recentEvents = [...events].reverse().slice(0, 40);
   const bridgeRunId =
     studio?.bridge_run_id || run.dify?.bridge_run_id || undefined;
+  const canResume =
+    order.status === "failed" && Boolean(bridgeRunId) && Boolean(onResume);
 
   const detailText =
     (studio?.error || "").trim() ||
@@ -276,6 +291,7 @@ function WorkOrderRunPanelBody({
         <RunArtifactsPanel
           runId={run.run_id}
           bridgeRunId={bridgeRunId}
+          snapshotPaths={run.steps.flatMap((s) => s.artifact_paths || [])}
         />
       ),
     },
@@ -386,6 +402,13 @@ function WorkOrderRunPanelBody({
             </Button>
             <Button
               size="small"
+              icon={<NodeIndexOutlined />}
+              onClick={() => setFlowOpen(true)}
+            >
+              流程可视化
+            </Button>
+            <Button
+              size="small"
               icon={<ExpandOutlined />}
               onClick={() => setOutputOpen(true)}
             >
@@ -436,11 +459,16 @@ function WorkOrderRunPanelBody({
           ) : null}
         </div>
 
-        {order.status === "failed" && onRestart ||
+        {(order.status === "failed" && (onRestart || canResume)) ||
         order.status === "pending_approval" ? (
           <div className="wo-run-now-actions">
+            {canResume ? (
+              <Button size="small" type="primary" onClick={onResume}>
+                从失败阶段续跑
+              </Button>
+            ) : null}
             {order.status === "failed" && onRestart ? (
-              <Button size="small" type="primary" onClick={onRestart}>
+              <Button size="small" onClick={onRestart}>
                 重新执行
               </Button>
             ) : null}
@@ -493,7 +521,19 @@ function WorkOrderRunPanelBody({
                     {" · "}
                   </>
                 ) : null}
-                commit <Typography.Text code>{run.git.commit_sha}</Typography.Text>
+                commit{" "}
+                {(() => {
+                  const commitHref =
+                    run.git.commit_url ||
+                    forgeCommitUrl(run.git.pr_url, run.git.commit_sha);
+                  return commitHref ? (
+                    <Typography.Link href={commitHref} target="_blank">
+                      <Typography.Text code>{run.git.commit_sha}</Typography.Text>
+                    </Typography.Link>
+                  ) : (
+                    <Typography.Text code>{run.git.commit_sha}</Typography.Text>
+                  );
+                })()}
               </Typography.Text>
               {run.git.commit_message ? (
                 <Typography.Text type="secondary">{run.git.commit_message}</Typography.Text>
@@ -511,7 +551,18 @@ function WorkOrderRunPanelBody({
         />
       ) : null}
 
-      <Card size="small" className="wo-run-section" title="流水线步骤">
+      <Card size="small" className="wo-run-section" title="流水线步骤"
+        extra={
+          <Button
+            type="link"
+            size="small"
+            icon={<NodeIndexOutlined />}
+            onClick={() => setFlowOpen(true)}
+          >
+            打开可视化
+          </Button>
+        }
+      >
         <Steps
           className="wo-run-steps"
           direction="horizontal"
@@ -567,11 +618,10 @@ function WorkOrderRunPanelBody({
                       {e.bridge_stage ? <Tag color="green">{e.bridge_stage}</Tag> : null}
                       {e.dry_run ? <Tag color="orange">dry-run</Tag> : null}
                     </Space>
-                    <Typography.Paragraph
-                      style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
-                    >
-                      {e.message}
-                    </Typography.Paragraph>
+                    <LiveEventMessage
+                      message={e.message}
+                      onOpenDoc={setDocPath}
+                    />
                   </div>
                 </div>
               ))}
@@ -678,6 +728,24 @@ function WorkOrderRunPanelBody({
           <Empty description="尚无产出" />
         )}
       </Modal>
+
+      <PipelineFlowModal
+        open={flowOpen}
+        onClose={() => setFlowOpen(false)}
+        title="执行流程预览"
+        steps={toFlowStepsFromRun(run.steps)}
+        withStatus
+        runSteps={run.steps}
+        events={events}
+        onOpenDoc={setDocPath}
+      />
+
+      <ArtifactDocModal
+        open={Boolean(docPath)}
+        path={docPath}
+        runId={run.run_id}
+        onClose={() => setDocPath(null)}
+      />
     </div>
   );
 }

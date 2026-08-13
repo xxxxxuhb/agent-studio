@@ -109,16 +109,17 @@ ${YAML.stringify(secrets, { lineWidth: 100 })}`;
     if (process.env.STUDIO_LANGUAGE === "zh" || process.env.STUDIO_LANGUAGE === "en") {
       fromEnv.language = process.env.STUDIO_LANGUAGE;
     }
-    if (process.env.STUDIO_BRIDGE_BASE_URL?.trim()) {
-      fromEnv.bridge_base_url = process.env.STUDIO_BRIDGE_BASE_URL.trim();
-    } else if (process.env.DIFY_BRIDGE_BASE_URL?.trim()) {
-      fromEnv.bridge_base_url = process.env.DIFY_BRIDGE_BASE_URL.trim();
-    }
-    if (process.env.STUDIO_AGENTS_MD_PATH?.trim()) {
-      fromEnv.agents_md_path = process.env.STUDIO_AGENTS_MD_PATH.trim();
-    } else if (process.env.DIFY_AGENTS_MD_PATH?.trim()) {
-      fromEnv.agents_md_path = process.env.DIFY_AGENTS_MD_PATH.trim();
-    }
+    // Prefer STUDIO_*; DIFY_* kept as deprecated aliases for old .env files.
+    const bridgeUrl =
+      process.env.STUDIO_BRIDGE_BASE_URL?.trim() ||
+      process.env.DIFY_BRIDGE_BASE_URL?.trim() ||
+      "";
+    if (bridgeUrl) fromEnv.bridge_base_url = bridgeUrl;
+    const agentsMd =
+      process.env.STUDIO_AGENTS_MD_PATH?.trim() ||
+      process.env.DIFY_AGENTS_MD_PATH?.trim() ||
+      "";
+    if (agentsMd) fromEnv.agents_md_path = agentsMd;
     return StudioConfigSchema.parse({
       ...this.loadFile(this.filePath),
       ...fromEnv,

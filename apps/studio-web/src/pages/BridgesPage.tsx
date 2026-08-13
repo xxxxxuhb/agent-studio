@@ -50,6 +50,7 @@ type PrepareForm = {
   studio_url: string;
   base_url: string;
   auth_mode: AgentAuthMode;
+  link_type: "cli" | "desktop";
   api_key?: string;
 };
 
@@ -80,6 +81,7 @@ export function BridgesPage() {
       studio_url: defaultStudioUrl(),
       base_url: defaultPublicUrl(),
       auth_mode: "key",
+      link_type: "cli",
       api_key: "",
     }),
     [],
@@ -156,6 +158,7 @@ export function BridgesPage() {
         studio_url: values.studio_url.trim().replace(/\/$/, ""),
         base_url: values.base_url.trim().replace(/\/$/, ""),
         auth_mode: values.auth_mode,
+        link_type: values.link_type,
       });
 
       const key =
@@ -175,7 +178,11 @@ export function BridgesPage() {
         }),
       });
       setTokenConfigured(res.token_configured);
-      message.success("已添加，请复制命令到执行器机器运行");
+      message.success(
+        values.link_type === "desktop"
+          ? "已添加，请用桌面 App 启动执行器"
+          : "已添加，请复制命令到执行器机器运行",
+      );
       await reload();
     } catch (err) {
       if (err && typeof err === "object" && "errorFields" in err) return;
@@ -264,6 +271,17 @@ export function BridgesPage() {
                   ) : null}
                 </Space>
               ),
+            },
+            {
+              title: "链接类型",
+              dataIndex: "link_type",
+              width: 110,
+              render: (v?: string) =>
+                v === "desktop" ? (
+                  <Tag color="purple">桌面 App</Tag>
+                ) : (
+                  <Tag>CLI</Tag>
+                ),
             },
             {
               title: "Agent 类型",
@@ -374,6 +392,20 @@ export function BridgesPage() {
               <Input placeholder="例如 my-mac" />
             </Form.Item>
             <Form.Item
+              name="link_type"
+              label="链接类型"
+              rules={[{ required: true }]}
+              extra="CLI：终端命令启动；桌面 App：用 bridge-desktop 托盘应用启动"
+            >
+              <Radio.Group
+                optionType="button"
+                options={[
+                  { value: "cli", label: "CLI" },
+                  { value: "desktop", label: "桌面 App" },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item
               name="driver"
               label="Agent 类型"
               rules={[{ required: true }]}
@@ -478,7 +510,7 @@ export function BridgesPage() {
             <Alert
               type="success"
               showIcon
-              message={`已预登记「${prepared.bridge.name}」· ${prepared.bridge.driver} · auth=${prepared.auth_mode} · 离线待连接`}
+              message={`已预登记「${prepared.bridge.name}」· ${prepared.bridge.driver} · ${prepared.link_type === "desktop" ? "桌面 App" : "CLI"} · auth=${prepared.auth_mode} · 离线待连接`}
             />
             {!prepared.token_configured ? (
               <Alert
@@ -494,8 +526,37 @@ export function BridgesPage() {
                 message="命令含 Agent API Key，请勿发到公开聊天或截图外传"
               />
             ) : null}
+            {prepared.link_type === "desktop" ? (
+              <Alert
+                type="info"
+                showIcon
+                message="桌面 App 启动"
+                description={
+                  <div>
+                    <ol style={{ margin: "8px 0", paddingLeft: 18 }}>
+                      <li>
+                        在本机打开 <Typography.Text code>bridge-desktop</Typography.Text>
+                        （或先 <Typography.Text code>npm run tauri -w @agent-studio/bridge-desktop</Typography.Text>）
+                      </li>
+                      <li>
+                        确认 App 工作目录下的 <Typography.Text code>.env</Typography.Text>{" "}
+                        含 Studio URL / Token / public-url（可参考下方命令参数）
+                      </li>
+                      <li>在托盘或窗口中启动 Bridge；连上后本页会显示「桌面 App」</li>
+                    </ol>
+                    <Typography.Text type="secondary">
+                      也可临时用 CLI 命令验证连通（App 启动会自动上报 link_type=desktop）：
+                    </Typography.Text>
+                  </div>
+                }
+              />
+            ) : null}
             <div>
-              <Typography.Text strong>复制到执行器机器运行</Typography.Text>
+              <Typography.Text strong>
+                {prepared.link_type === "desktop"
+                  ? "参考命令（可选，用于核对参数）"
+                  : "复制到执行器机器运行"}
+              </Typography.Text>
               <Typography.Paragraph
                 code
                 copyable
@@ -504,18 +565,20 @@ export function BridgesPage() {
                 {prepared.install_command_display}
               </Typography.Paragraph>
             </div>
-            <div>
-              <Typography.Text type="secondary">
-                本仓库本地开发（包尚未发布到 npm 时）
-              </Typography.Text>
-              <Typography.Paragraph
-                code
-                copyable
-                style={{ marginTop: 8, marginBottom: 0, whiteSpace: "pre-wrap" }}
-              >
-                {prepared.local_command_display}
-              </Typography.Paragraph>
-            </div>
+            {prepared.link_type === "cli" ? (
+              <div>
+                <Typography.Text type="secondary">
+                  本仓库本地开发（包尚未发布到 npm 时）
+                </Typography.Text>
+                <Typography.Paragraph
+                  code
+                  copyable
+                  style={{ marginTop: 8, marginBottom: 0, whiteSpace: "pre-wrap" }}
+                >
+                  {prepared.local_command_display}
+                </Typography.Paragraph>
+              </div>
+            ) : null}
           </Space>
         )}
       </Modal>

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { loadAgentsConfig } from "./config.js";
 import type { AgentsConfig } from "./types.js";
 
@@ -96,9 +95,8 @@ function countHits(text: string, terms: string[]): { hits: string[]; score: numb
 }
 
 function defaultWorkspaceRoots(): string[] {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  // apps/studio-bridge/src → ../../examples
-  return [path.resolve(here, "../../../examples")];
+  // No bundled example repos — require explicit roots or project binding.
+  return [];
 }
 
 function discoverAgentsMdFiles(): string[] {
@@ -220,7 +218,7 @@ export function resolveWorkspaceTarget(input: {
   const catalog = loadCatalog();
   if (!catalog.length) {
     throw new Error(
-      "No AGENTS.md found. Set BRIDGE_AGENTS_PATHS / BRIDGE_WORKSPACE_ROOTS, or add examples/*/AGENTS.md",
+      "No AGENTS.md found. Bind a Studio project, or set BRIDGE_AGENTS_PATHS / BRIDGE_WORKSPACE_ROOTS",
     );
   }
 

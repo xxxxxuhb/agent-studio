@@ -9,7 +9,6 @@
 - 编排：`packages/orchestrator`（按流水线步骤调 Bridge）
 - Agent 运行时：`packages/agent-runtime`（可切换 cursor / trae / qoder / 自定义驱动）
 - 共享契约：`packages/agent-schema`
-- 示例仓：`examples/demo-repo`
 
 ## 目录
 
@@ -19,7 +18,8 @@ apps/studio-web        React UI   :5173
 apps/studio-bridge     Bridge API :8787
 packages/agent-schema  Zod / 类型
 packages/agent-runtime 可插拔 Agent 驱动
-examples/demo-repo     示例 AGENTS.md 目标仓
+packages/orchestrator  Studio 编排器
+packages/bridge        Bridge CLI / 执行端
 ```
 
 ## 启动
@@ -39,7 +39,7 @@ cp apps/studio-bridge/.env.example apps/studio-bridge/.env
 
 npm run dev:api      # 终端 1
 npm run dev:web      # 终端 2
-npm run dev:bridge   # 终端 3（Dify 执行需要）
+npm run dev:bridge   # 终端 3
 ```
 
 - MySQL：`127.0.0.1:3316`（容器 `agent-studio-mysql`）
@@ -50,10 +50,11 @@ npm run dev:bridge   # 终端 3（Dify 执行需要）
 更完整的本地搭建与环境变量说明：
 
 - [docs/环境配置指南.md](docs/环境配置指南.md)
-- [docs/本地GitLab搭建指南.md](docs/本地GitLab搭建指南.md)
+- [docs/对接外部Git.md](docs/对接外部Git.md)（公司 GitLab / GitHub；**不内置 GitLab**）
 - [docs/架构与时序图.md](docs/架构与时序图.md)
 - 项目 Skill：[skills/local-stack-setup/](skills/local-stack-setup/)（含 [mysql.md](skills/local-stack-setup/mysql.md)）
-- Docker Compose：[`deploy/`](deploy/)（MySQL / GitLab / Dify）
+- Docker Compose：[`deploy/`](deploy/)（**仅 MySQL**）
+- 一键：`./scripts/bootstrap-dev.sh`
 
 ## Agent 驱动切换
 
@@ -140,10 +141,10 @@ npx @agent-studio/bridge start --driver cursor \
 | `AGENT_DRIVER` | `auto` | Bridge 使用的 agent 驱动 |
 | `CURSOR_API_KEY` | — | cursor 驱动 |
 | `BRIDGE_PORT` | `8787` | Bridge 端口 |
-| `BRIDGE_WORKSPACE_ROOTS` | `examples/` | 无项目绑定时扫描 AGENTS.md |
+| `BRIDGE_WORKSPACE_ROOTS` | — | 无项目绑定时扫描 `AGENTS.md` 的根目录（逗号分隔） |
 | `BRIDGE_GIT_AUTHOR_NAME` / `EMAIL` | bot@… | 提交作者（覆盖本机 `user.name`） |
 | `BRIDGE_GIT_SSH_KEY` | — | Bot SSH 私钥；存在则自动 prefer SSH |
-| `BRIDGE_GIT_SSH_PORT` | — | 非 22 时写成 `ssh://git@host:PORT/…`（本地 GitLab 常为 `2224`） |
+| `BRIDGE_GIT_SSH_PORT` | — | 非 22 时写成 `ssh://git@host:PORT/…` |
 | `BRIDGE_GIT_PREFER_SSH` | — | 强制 HTTP remote → SSH |
 | `GITLAB_TOKEN` | — | 开 MR 用的 bot PAT（建议非 root） |
 | `STUDIO_GIT_SSH_*` | — | 可选：Studio UI `ensureCloned` 调试克隆；工单工作区由 Bridge `BRIDGE_GIT_*` / `BRIDGE_REPOS_DIR` 负责 |

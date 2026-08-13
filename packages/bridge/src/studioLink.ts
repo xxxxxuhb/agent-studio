@@ -9,6 +9,8 @@ export type StudioLinkOptions = {
   token: string;
   name: string;
   publicUrl: string;
+  /** cli (default) | desktop — reported to Studio as link_type */
+  linkType?: "cli" | "desktop";
 };
 
 export type StudioLink = {
@@ -17,6 +19,13 @@ export type StudioLink = {
   close: () => void;
 };
 
+function resolveLinkType(explicit?: "cli" | "desktop"): "cli" | "desktop" {
+  if (explicit === "desktop" || explicit === "cli") return explicit;
+  const env = (process.env.BRIDGE_LINK_TYPE || "").trim().toLowerCase();
+  if (env === "desktop") return "desktop";
+  return "cli";
+}
+
 /**
  * Connect executor → Studio over Socket.IO (/bridges).
  * Syncs online / offline / busy without HTTP polling.
@@ -24,6 +33,7 @@ export type StudioLink = {
 export function connectStudioLink(opts: StudioLinkOptions): Promise<StudioLink> {
   const base = opts.studioUrl.replace(/\/$/, "").replace(/\/api$/, "");
   const driver = describeActiveDriver();
+  const linkType = resolveLinkType(opts.linkType);
 
   return new Promise((resolve, reject) => {
     const socket: Socket = io(`${base}/bridges`, {
@@ -46,6 +56,7 @@ export function connectStudioLink(opts: StudioLinkOptions): Promise<StudioLink> 
       dry_run: driver.dryRun,
       model: driver.model || "",
       platform: process.platform,
+      link_type: linkType,
       available_drivers: listAgentDriverIds(),
       id: bridgeId || undefined,
       status: currentRunId ? ("busy" as const) : ("online" as const),

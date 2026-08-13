@@ -3,6 +3,7 @@ import type {
   ApplyDecisionInput,
   OrchestratorOutcome,
   OrchestratorStep,
+  ResumeStudioRunInput,
   StageResult,
   StartStudioRunInput,
   StudioRunState,
@@ -365,4 +366,59 @@ export async function applyStudioDecision(
     auto_approve,
     onProgress: input.onProgress,
   });
+}
+
+/**
+ * Resume from a failed (or interrupted) pipeline step on an existing Bridge run.
+ * Does not call createRun / manager — reuses `state.bridge_run_id`.
+ */
+export async function resumeStudioRun(
+  input: ResumeStudioRunInput,
+): Promise<OrchestratorOutcome> {
+  const bridgeRunId = (input.state.bridge_run_id || "").trim();
+  if (!bridgeRunId) {
+    return fail(
+      { ...input.state, status: "failed", error: "missing bridge_run_id" },
+      input.current_step_index,
+      "无法续跑：缺少 Bridge run id，请改用「重新执行」",
+    );
+  }
+  if (!input.steps.length) {
+    return fail(
+      input.state,
+      0,
+      "无法续跑：流水线无步骤",
+    );
+  }
+  const idx = Math.min(
+    Math.max(0, input.current_step_index),
+    input.steps.length - 1,
+  );
+  const state: StudioRunState = {
+    ...input.state,
+    bridge_run_id: bridgeRunId,
+    status: "running",
+    pending_human: false,
+    error: null,
+  };
+  if (input.onProgress) {
+    await input.onProgress({
+      state,
+      step_index: idx,
+      stage: stepStage(input.steps[idx]!, input.agents),
+      summary: input.feedback?.trim() || "从失败阶段续跑…",
+    });
+  }
+  return runStepAtIndex(
+    {
+      bridge: input.bridge,
+      steps: input.steps,
+      agents: input.agents,
+      state,
+      auto_approve: input.auto_approve,
+      onProgress: input.onProgress,
+    },
+    idx,
+    input.feedback,
+  );
 }

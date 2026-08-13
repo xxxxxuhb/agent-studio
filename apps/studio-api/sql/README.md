@@ -32,14 +32,14 @@ mysqldump -h 127.0.0.1 -P 3316 -u root -p123456 \
   > agent_studio-$(date +%Y%m%d).sql
 ```
 
-Also back up live files (not in MySQL yet):
+Also back up live files (not in MySQL yet — settings/secrets stay YAML `0600` until a future MySQL/Vault pass):
 
 - `apps/studio-api/data/team-settings/`
-- `apps/studio-api/data/team-secrets/` (0600; per-team Dify/Git overlays)
+- `apps/studio-api/data/team-secrets/`（按团队 Bridge URL / Git SSH overlay）
 - `apps/studio-api/data/work-order-chats/`
-- `apps/studio-api/data/dify-config.yaml`
-- `apps/studio-api/data/dify-secrets.yaml` (0600)
 - `apps/studio-api/data/studio-config.yaml`
+
+Legacy（可归档）：`dify-config.yaml` / `dify-secrets.yaml` 仅作一次性迁入来源，运行时不再读写。
 
 Legacy dirs `data/{agents,pipelines,bridges,projects,work-orders,run-logs}` can be archived/deleted after a successful migrate; they are not the source of truth.
 

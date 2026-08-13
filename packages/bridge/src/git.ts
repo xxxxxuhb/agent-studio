@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { openGithubPullRequest, openGitlabMergeRequest } from "./forgeHttp.js";
 import { buildGitBotEnv } from "./gitIdentity.js";
 
 function git(repoPath: string, args: string[]): string {
@@ -251,23 +252,9 @@ function parseOriginRemote(repoPath: string): RemoteInfo | null {
   return parseOriginRemoteUrl(raw);
 }
 
-async function httpJson(
-  url: string,
-  init: { method: string; headers: Record<string, string>; body?: string },
-): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const res = await fetch(url, {
-    method: init.method,
-    headers: init.headers,
-    body: init.body,
-    signal: AbortSignal.timeout(30_000),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
-}
-
 /**
  * Open a merge PR/MR from feature branch → default branch after push.
- * Uses HTTP API + env tokens only (no gh/glab dependency).
+ * Uses Octokit / Gitbeaker (+ env tokens).
  */
 export async function createMergePr(opts: {
   repoPath: string;
@@ -299,111 +286,24 @@ export async function createMergePr(opts: {
   }
 
   if (remote.kind === "github") {
-    const token = (
-      process.env.BRIDGE_GITHUB_TOKEN ||
-      process.env.GITHUB_TOKEN ||
-      process.env.GH_TOKEN ||
-      ""
-    ).trim();
-    if (!token) {
-      return {
-        note: "PR skipped: set GITHUB_TOKEN (or BRIDGE_GITHUB_TOKEN) in bridge .env",
-      };
-    }
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json",
-      "User-Agent": "agent-studio-bridge",
-    };
-    const res = await httpJson(
-      `${remote.apiBase}/repos/${remote.projectPath}/pulls`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          title: opts.title,
-          head,
-          base,
-          body: opts.body,
-          draft: false,
-        }),
-      },
-    );
-    if (res.ok && res.data && typeof res.data === "object") {
-      const url = String((res.data as { html_url?: string }).html_url || "");
-      return { url, note: `opened GitHub PR: ${url}` };
-    }
-    if (res.status === 422) {
-      const owner = remote.projectPath.split("/")[0] || "";
-      const list = await httpJson(
-        `${remote.apiBase}/repos/${remote.projectPath}/pulls?head=${encodeURIComponent(
-          `${owner}:${head}`,
-        )}&state=open`,
-        { method: "GET", headers },
-      );
-      if (Array.isArray(list.data) && list.data[0]) {
-        const url = String(
-          (list.data[0] as { html_url?: string }).html_url || "",
-        );
-        if (url) return { url, note: `existing GitHub PR: ${url}` };
-      }
-    }
-    return {
-      note: `GitHub PR failed: HTTP ${res.status} ${JSON.stringify(res.data).slice(0, 200)}`,
-    };
+    return openGithubPullRequest({
+      apiBase: remote.apiBase,
+      projectPath: remote.projectPath,
+      title: opts.title,
+      head,
+      base,
+      body: opts.body,
+    });
   }
 
-  // GitLab MR
-  const token = (
-    process.env.BRIDGE_GITLAB_TOKEN ||
-    process.env.GITLAB_TOKEN ||
-    process.env.PRIVATE_TOKEN ||
-    ""
-  ).trim();
-  if (!token) {
-    return {
-      note: "PR/MR skipped: set GITLAB_TOKEN (or BRIDGE_GITLAB_TOKEN) in bridge .env",
-    };
-  }
-  const projectId = encodeURIComponent(remote.projectPath);
-  const headers = {
-    "PRIVATE-TOKEN": token,
-    "Content-Type": "application/json",
-  };
-  const res = await httpJson(
-    `${remote.apiBase}/projects/${projectId}/merge_requests`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        source_branch: head,
-        target_branch: base,
-        title: opts.title,
-        description: opts.body,
-        remove_source_branch: false,
-      }),
-    },
-  );
-  if (res.ok && res.data && typeof res.data === "object") {
-    const url = String((res.data as { web_url?: string }).web_url || "");
-    return { url, note: `opened GitLab MR: ${url}` };
-  }
-  if (res.status === 409 || res.status === 400) {
-    const list = await httpJson(
-      `${remote.apiBase}/projects/${projectId}/merge_requests?source_branch=${encodeURIComponent(
-        head,
-      )}&state=opened`,
-      { method: "GET", headers: { "PRIVATE-TOKEN": token } },
-    );
-    if (Array.isArray(list.data) && list.data[0]) {
-      const url = String((list.data[0] as { web_url?: string }).web_url || "");
-      if (url) return { url, note: `existing GitLab MR: ${url}` };
-    }
-  }
-  return {
-    note: `GitLab MR failed: HTTP ${res.status} ${JSON.stringify(res.data).slice(0, 200)}`,
-  };
+  return openGitlabMergeRequest({
+    apiBase: remote.apiBase,
+    projectPath: remote.projectPath,
+    title: opts.title,
+    sourceBranch: head,
+    targetBranch: base,
+    description: opts.body,
+  });
 }
 
 /**

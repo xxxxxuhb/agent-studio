@@ -60,6 +60,7 @@ export class BridgesGateway
       dry_run?: boolean;
       model?: string;
       platform?: string;
+      link_type?: "cli" | "desktop";
       available_drivers?: string[];
       id?: string;
       status?: "online" | "offline" | "busy";
@@ -76,6 +77,7 @@ export class BridgesGateway
         dry_run: body?.dry_run,
         model: body?.model,
         platform: body?.platform,
+        link_type: body?.link_type,
         available_drivers: body?.available_drivers,
         id: body?.id,
         status: body?.status,

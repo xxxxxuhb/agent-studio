@@ -1,4 +1,5 @@
 import type { WorkOrder, WorkOrderGit, WorkOrderRunStep } from "@agent-studio/agent-schema";
+import { forgeCommitUrl } from "@agent-studio/agent-schema";
 
 export type ParsedBridgeGitNote = {
   sha: string;
@@ -49,6 +50,7 @@ export function buildBridgeGitState(opts: {
   step?: Pick<WorkOrderRunStep, "step_id">;
 }): WorkOrderGit {
   const { previous, parsed, stamp, step } = opts;
+  const prUrl = parsed.prUrl || previous?.pr_url || "";
   return {
     status: parsed.prUrl
       ? "pr_open"
@@ -60,7 +62,9 @@ export function buildBridgeGitState(opts: {
     head_sha: parsed.sha,
     commit_sha: parsed.sha,
     commit_message: previous?.commit_message || "review: pass and commit",
-    pr_url: parsed.prUrl || previous?.pr_url || "",
+    pr_url: prUrl,
+    commit_url:
+      forgeCommitUrl(prUrl, parsed.sha) || previous?.commit_url || "",
     committed_at: stamp,
     committed_by_step: step?.step_id || previous?.committed_by_step || "",
     note: parsed.prUrl

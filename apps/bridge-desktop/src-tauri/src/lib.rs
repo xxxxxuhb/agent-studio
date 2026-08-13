@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{
@@ -11,6 +12,8 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, State, WindowEvent,
 };
+
+const LOG_CAP: usize = 400;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +39,23 @@ pub struct BridgeStatus {
     pub detail: String,
     pub health_url: String,
     pub bridge_cwd: String,
+    pub node_ok: bool,
+    pub bin_ok: bool,
+    pub cwd_ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathProbe {
+    pub repo_root: Option<String>,
+    pub node_path: String,
+    pub node_ok: bool,
+    pub bridge_bin: String,
+    pub bin_ok: bool,
+    pub bridge_cwd: String,
+    pub cwd_ok: bool,
+    pub env_ok: bool,
+    pub hints: Vec<String>,
 }
 
 struct ManagedBridge {
@@ -43,15 +63,133 @@ struct ManagedBridge {
     config: AppConfig,
 }
 
-pub struct AppState(Mutex<ManagedBridge>);
+pub struct AppState {
+    bridge: Mutex<ManagedBridge>,
+    logs: Arc<Mutex<VecDeque<String>>>,
+}
+
+fn push_log(logs: &Arc<Mutex<VecDeque<String>>>, line: String) {
+    if let Ok(mut g) = logs.lock() {
+        if g.len() >= LOG_CAP {
+            g.pop_front();
+        }
+        g.push_back(line);
+    }
+}
+
+fn looks_like_repo_root(dir: &Path) -> bool {
+    dir.join("packages/bridge/package.json").is_file()
+        && dir.join("apps/studio-bridge").is_dir()
+}
+
+fn walk_up_for_repo(start: PathBuf) -> Option<PathBuf> {
+    let mut cur = start;
+    for _ in 0..10 {
+        if looks_like_repo_root(&cur) {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn find_repo_root() -> Option<PathBuf> {
+    let mut starts: Vec<PathBuf> = Vec::new();
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    starts.push(manifest.join("../../.."));
+    if let Ok(cwd) = std::env::current_dir() {
+        starts.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            starts.push(parent.to_path_buf());
+        }
+    }
+    for start in starts {
+        let canon = start.canonicalize().unwrap_or(start);
+        if let Some(root) = walk_up_for_repo(canon) {
+            return Some(root);
+        }
+    }
+    None
+}
 
 fn repo_root_guess() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // apps/bridge-desktop/src-tauri → repo root
-    manifest
-        .join("../../..")
-        .canonicalize()
-        .unwrap_or_else(|_| manifest.join("../../.."))
+    find_repo_root().unwrap_or_else(|| {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest
+            .join("../../..")
+            .canonicalize()
+            .unwrap_or_else(|_| manifest.join("../../.."))
+    })
+}
+
+fn path_is_executable(p: &Path) -> bool {
+    if !p.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(p) {
+            return meta.permissions().mode() & 0o111 != 0;
+        }
+    }
+    true
+}
+
+fn which_node() -> String {
+    if let Ok(p) = std::env::var("BRIDGE_DESKTOP_NODE") {
+        let t = p.trim();
+        if !t.is_empty() && path_is_executable(Path::new(t)) {
+            return t.to_string();
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(out) = Command::new("sh").args(["-lc", "command -v node"]).output() {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() && path_is_executable(Path::new(&s)) {
+                    return s;
+                }
+            }
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let candidates = [
+            "/usr/local/bin/node".to_string(),
+            "/opt/homebrew/bin/node".to_string(),
+            format!("{home}/.nvm/current/bin/node"),
+            format!("{home}/.fnm/current/bin/node"),
+            format!("{home}/.volta/bin/node"),
+            format!("{home}/.local/share/fnm/current/bin/node"),
+        ];
+        for c in candidates {
+            if path_is_executable(Path::new(&c)) {
+                return c;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(out) = Command::new("cmd")
+            .args(["/C", "where node"])
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = s.lines().next() {
+                    let t = line.trim();
+                    if !t.is_empty() && Path::new(t).is_file() {
+                        return t.to_string();
+                    }
+                }
+            }
+        }
+    }
+    "node".into()
 }
 
 fn default_config() -> AppConfig {
@@ -67,24 +205,29 @@ fn default_config() -> AppConfig {
     }
 }
 
-fn which_node() -> String {
-    if let Ok(p) = std::env::var("BRIDGE_DESKTOP_NODE") {
-        if !p.trim().is_empty() {
-            return p;
-        }
+/// Re-probe missing/stale paths so renamed checkouts still work.
+fn heal_config(mut cfg: AppConfig) -> AppConfig {
+    let root = find_repo_root();
+    if !path_is_executable(Path::new(&cfg.node_path)) {
+        cfg.node_path = which_node();
     }
-    #[cfg(unix)]
-    {
-        if let Ok(out) = Command::new("sh").args(["-lc", "command -v node"]).output() {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !s.is_empty() {
-                    return s;
-                }
+    if !Path::new(&cfg.bridge_bin).is_file() {
+        if let Some(r) = &root {
+            let bin = r.join("packages/bridge/dist/bin.js");
+            if bin.is_file() {
+                cfg.bridge_bin = bin.to_string_lossy().into();
             }
         }
     }
-    "node".into()
+    if !Path::new(&cfg.bridge_cwd).is_dir() {
+        if let Some(r) = &root {
+            let cwd = r.join("apps/studio-bridge");
+            if cwd.is_dir() {
+                cfg.bridge_cwd = cwd.to_string_lossy().into();
+            }
+        }
+    }
+    cfg
 }
 
 fn config_path() -> PathBuf {
@@ -99,11 +242,11 @@ fn load_config() -> AppConfig {
     if path.exists() {
         if let Ok(raw) = fs::read_to_string(&path) {
             if let Ok(cfg) = serde_json::from_str::<AppConfig>(&raw) {
-                return cfg;
+                return heal_config(cfg);
             }
         }
     }
-    default_config()
+    heal_config(default_config())
 }
 
 fn save_config(cfg: &AppConfig) -> Result<(), String> {
@@ -195,6 +338,19 @@ fn fetch_health(url: &str) -> (String, Option<String>, Option<String>, String) {
     }
 }
 
+fn pipe_to_logs(logs: Arc<Mutex<VecDeque<String>>>, label: &str, pipe: impl Read + Send + 'static) {
+    let label = label.to_string();
+    thread::spawn(move || {
+        let reader = BufReader::new(pipe);
+        for line in reader.lines() {
+            match line {
+                Ok(l) => push_log(&logs, format!("[{label}] {l}")),
+                Err(_) => break,
+            }
+        }
+    });
+}
+
 #[cfg(not(unix))]
 fn signal_child(pid: u32, _sig: i32) -> Result<(), String> {
     let _ = Command::new("taskkill")
@@ -236,31 +392,7 @@ fn stop_child(child: &mut Option<Child>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn get_config(state: State<'_, AppState>) -> AppConfig {
-    state.0.lock().unwrap().config.clone()
-}
-
-#[tauri::command]
-fn set_config(state: State<'_, AppState>, config: AppConfig) -> Result<AppConfig, String> {
-    save_config(&config)?;
-    let mut guard = state.0.lock().unwrap();
-    guard.config = config.clone();
-    Ok(config)
-}
-
-#[tauri::command]
-fn reset_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
-    let cfg = default_config();
-    save_config(&cfg)?;
-    let mut guard = state.0.lock().unwrap();
-    guard.config = cfg.clone();
-    Ok(cfg)
-}
-
-#[tauri::command]
-fn bridge_status(state: State<'_, AppState>) -> BridgeStatus {
-    let mut guard = state.0.lock().unwrap();
+fn status_from_guard(guard: &mut ManagedBridge) -> BridgeStatus {
     let (alive, pid) = child_alive(&mut guard.child);
     let health_url = resolve_health_url(&guard.config);
     let (health, driver, name, mut detail) = fetch_health(&health_url);
@@ -275,6 +407,9 @@ fn bridge_status(state: State<'_, AppState>) -> BridgeStatus {
         }
         health
     };
+    let node_ok = path_is_executable(Path::new(&guard.config.node_path));
+    let bin_ok = Path::new(&guard.config.bridge_bin).is_file();
+    let cwd_ok = Path::new(&guard.config.bridge_cwd).is_dir();
     BridgeStatus {
         process_alive: alive,
         pid,
@@ -284,13 +419,99 @@ fn bridge_status(state: State<'_, AppState>) -> BridgeStatus {
         detail,
         health_url,
         bridge_cwd: guard.config.bridge_cwd.clone(),
+        node_ok,
+        bin_ok,
+        cwd_ok,
+    }
+}
+
+#[tauri::command]
+fn get_config(state: State<'_, AppState>) -> AppConfig {
+    state.bridge.lock().unwrap().config.clone()
+}
+
+#[tauri::command]
+fn set_config(state: State<'_, AppState>, config: AppConfig) -> Result<AppConfig, String> {
+    let healed = heal_config(config);
+    save_config(&healed)?;
+    let mut guard = state.bridge.lock().unwrap();
+    guard.config = healed.clone();
+    Ok(healed)
+}
+
+#[tauri::command]
+fn reset_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
+    let cfg = heal_config(default_config());
+    save_config(&cfg)?;
+    let mut guard = state.bridge.lock().unwrap();
+    guard.config = cfg.clone();
+    Ok(cfg)
+}
+
+#[tauri::command]
+fn probe_paths(state: State<'_, AppState>) -> PathProbe {
+    let cfg = state.bridge.lock().unwrap().config.clone();
+    let root = find_repo_root().map(|p| p.to_string_lossy().into_owned());
+    let node_ok = path_is_executable(Path::new(&cfg.node_path));
+    let bin_ok = Path::new(&cfg.bridge_bin).is_file();
+    let cwd_ok = Path::new(&cfg.bridge_cwd).is_dir();
+    let env_ok = Path::new(&cfg.bridge_cwd).join(".env").is_file();
+    let mut hints = Vec::new();
+    if !node_ok {
+        hints.push("找不到可用的 node：安装 Node ≥20，或设置 BRIDGE_DESKTOP_NODE".into());
+    }
+    if !bin_ok {
+        hints.push("缺少 bridge_bin：在仓库根执行 npm run build -w @agent-studio/bridge".into());
+    }
+    if !cwd_ok {
+        hints.push("bridge_cwd 不存在：点「重置路径」或检查仓库位置".into());
+    } else if !env_ok {
+        hints.push("apps/studio-bridge/.env 缺失：从 .env.example 复制一份".into());
+    }
+    if root.is_none() {
+        hints.push("未探测到 monorepo 根（需含 packages/bridge 与 apps/studio-bridge）".into());
+    }
+    PathProbe {
+        repo_root: root,
+        node_path: cfg.node_path,
+        node_ok,
+        bridge_bin: cfg.bridge_bin,
+        bin_ok,
+        bridge_cwd: cfg.bridge_cwd,
+        cwd_ok,
+        env_ok,
+        hints,
+    }
+}
+
+#[tauri::command]
+fn bridge_status(state: State<'_, AppState>) -> BridgeStatus {
+    let mut guard = state.bridge.lock().unwrap();
+    status_from_guard(&mut guard)
+}
+
+#[tauri::command]
+fn bridge_logs(state: State<'_, AppState>) -> Vec<String> {
+    state
+        .logs
+        .lock()
+        .map(|g| g.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn clear_bridge_logs(state: State<'_, AppState>) {
+    if let Ok(mut g) = state.logs.lock() {
+        g.clear();
     }
 }
 
 #[tauri::command]
 fn start_bridge(state: State<'_, AppState>) -> Result<BridgeStatus, String> {
     {
-        let mut guard = state.0.lock().unwrap();
+        let mut guard = state.bridge.lock().unwrap();
+        guard.config = heal_config(guard.config.clone());
+        let _ = save_config(&guard.config);
         let (alive, _) = child_alive(&mut guard.child);
         if alive {
             return Err("Bridge process already running from this app".into());
@@ -314,13 +535,26 @@ fn start_bridge(state: State<'_, AppState>) -> Result<BridgeStatus, String> {
                 cfg.bridge_bin
             ));
         }
+        if !path_is_executable(Path::new(&cfg.node_path)) {
+            return Err(format!(
+                "node not found or not executable: {} — install Node ≥20 or set BRIDGE_DESKTOP_NODE",
+                cfg.node_path
+            ));
+        }
+        push_log(
+            &state.logs,
+            format!(
+                "[desktop] starting: {} {} start (cwd={})",
+                cfg.node_path, cfg.bridge_bin, cfg.bridge_cwd
+            ),
+        );
         let mut cmd = Command::new(&cfg.node_path);
         cmd.arg(&cfg.bridge_bin)
             .arg("start")
             .current_dir(&cwd)
+            .env("BRIDGE_LINK_TYPE", "desktop")
             .stdin(Stdio::null())
-            // Avoid pipe-buffer deadlock; keep stderr for immediate-exit diagnosis.
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Own process group so "quit UI only" can leave Bridge running after app exit.
         #[cfg(unix)]
@@ -328,33 +562,35 @@ fn start_bridge(state: State<'_, AppState>) -> Result<BridgeStatus, String> {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
-        let child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.spawn().map_err(|e| {
             format!(
                 "failed to spawn {} {} start (cwd={}): {e}",
                 cfg.node_path, cfg.bridge_bin, cfg.bridge_cwd
             )
         })?;
+        if let Some(out) = child.stdout.take() {
+            pipe_to_logs(state.logs.clone(), "out", out);
+        }
+        if let Some(err) = child.stderr.take() {
+            pipe_to_logs(state.logs.clone(), "err", err);
+        }
         guard.child = Some(child);
     }
     // Brief wait so health can flip / crash surfaces.
     thread::sleep(Duration::from_millis(600));
     {
-        use std::io::Read;
-        let mut guard = state.0.lock().unwrap();
+        let mut guard = state.bridge.lock().unwrap();
         if let Some(child) = guard.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let mut err = String::new();
-                    if let Some(mut stderr) = child.stderr.take() {
-                        let _ = stderr.read_to_string(&mut err);
-                    }
                     guard.child = None;
-                    let err = err.trim();
-                    return Err(if err.is_empty() {
-                        format!("Bridge exited immediately ({status})")
-                    } else {
-                        format!("Bridge exited immediately ({status}): {err}")
-                    });
+                    push_log(
+                        &state.logs,
+                        format!("[desktop] Bridge exited immediately ({status})"),
+                    );
+                    return Err(format!(
+                        "Bridge exited immediately ({status}) — 见下方日志"
+                    ));
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -363,23 +599,25 @@ fn start_bridge(state: State<'_, AppState>) -> Result<BridgeStatus, String> {
                 }
             }
         }
+        Ok(status_from_guard(&mut guard))
     }
-    Ok(bridge_status(state))
 }
 
 #[tauri::command]
 fn stop_bridge(state: State<'_, AppState>) -> Result<BridgeStatus, String> {
     {
-        let mut guard = state.0.lock().unwrap();
+        let mut guard = state.bridge.lock().unwrap();
+        push_log(&state.logs, "[desktop] stopping Bridge…".into());
         stop_child(&mut guard.child)?;
     }
     thread::sleep(Duration::from_millis(200));
-    Ok(bridge_status(state))
+    let mut guard = state.bridge.lock().unwrap();
+    Ok(status_from_guard(&mut guard))
 }
 
 #[tauri::command]
 fn open_bridge_cwd(state: State<'_, AppState>) -> Result<(), String> {
-    let cwd = state.0.lock().unwrap().config.bridge_cwd.clone();
+    let cwd = state.bridge.lock().unwrap().config.bridge_cwd.clone();
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
@@ -421,17 +659,24 @@ fn do_stop(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = load_config();
+    let logs = Arc::new(Mutex::new(VecDeque::new()));
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState(Mutex::new(ManagedBridge {
-            child: None,
-            config,
-        })))
+        .manage(AppState {
+            bridge: Mutex::new(ManagedBridge {
+                child: None,
+                config,
+            }),
+            logs,
+        })
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
             reset_config,
+            probe_paths,
             bridge_status,
+            bridge_logs,
+            clear_bridge_logs,
             start_bridge,
             stop_bridge,
             open_bridge_cwd
@@ -469,7 +714,7 @@ pub fn run() {
                         // Detach child so Drop won't kill it; then exit app process.
                         {
                             let state = app.state::<AppState>();
-                            let mut guard = state.0.lock().unwrap();
+                            let mut guard = state.bridge.lock().unwrap();
                             if let Some(child) = guard.child.take() {
                                 // leak intentional: Bridge keeps running after UI exits
                                 std::mem::forget(child);

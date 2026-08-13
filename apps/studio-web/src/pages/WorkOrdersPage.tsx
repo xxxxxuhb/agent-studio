@@ -231,6 +231,23 @@ export function WorkOrdersPage() {
     setRestartOpen(true);
   }
 
+  async function resumeRun() {
+    if (!selected?.run || selected.status !== "failed") return;
+    if (!selected.run.studio?.bridge_run_id) {
+      message.warning("缺少 Bridge run，无法续跑；请改用「重新执行」");
+      return;
+    }
+    try {
+      const updated = await workOrdersApi.resume(selected.id, {
+        feedback: feedback.trim() || undefined,
+      });
+      message.success("已从失败阶段续跑（后台执行）");
+      await reload(updated.id);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function confirmRestart() {
     if (!selected?.run || restartBusy) return;
     setRestartBusy(true);
@@ -399,6 +416,16 @@ export function WorkOrdersPage() {
                       {selected.status === "queued" ? "调整排队 / 启动" : "开始流水线"}
                     </Button>
                   ) : null}
+                  {selected.status === "failed" &&
+                  selected.run?.studio?.bridge_run_id ? (
+                    <Button
+                      type="primary"
+                      icon={<PlayCircleOutlined />}
+                      onClick={() => void resumeRun()}
+                    >
+                      从失败阶段续跑
+                    </Button>
+                  ) : null}
                   {selected.run ? (
                     <Button
                       icon={<RedoOutlined />}
@@ -545,6 +572,7 @@ export function WorkOrdersPage() {
                       void decide(decision, action, feedbackOverride)
                     }
                     onRestart={() => void restartRun()}
+                    onResume={() => void resumeRun()}
                     onOrderUpdate={(updated) => {
                       setItems((prev) =>
                         prev.map((w) => (w.id === updated.id ? updated : w)),

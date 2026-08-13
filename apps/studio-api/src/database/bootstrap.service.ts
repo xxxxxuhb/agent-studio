@@ -490,6 +490,7 @@ export class BootstrapService implements OnModuleInit {
             dry_run: Boolean(b.dry_run),
             model: b.model || "",
             platform: b.platform || "",
+            link_type: b.link_type === "desktop" ? "desktop" : "cli",
             available_drivers: b.available_drivers || [],
             status: b.status || "offline",
             current_run_id: b.current_run_id || "",

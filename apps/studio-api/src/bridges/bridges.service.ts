@@ -59,6 +59,7 @@ export class BridgesService implements OnModuleInit {
       dry_run: Boolean(entity.dry_run),
       model: entity.model || "",
       platform: entity.platform || "",
+      link_type: entity.link_type === "desktop" ? "desktop" : "cli",
       available_drivers: entity.available_drivers || [],
       status: entity.status || "offline",
       current_run_id: entity.current_run_id || "",
@@ -80,6 +81,7 @@ export class BridgesService implements OnModuleInit {
       dry_run: Boolean(bridge.dry_run),
       model: bridge.model || "",
       platform: bridge.platform || "",
+      link_type: bridge.link_type === "desktop" ? "desktop" : "cli",
       available_drivers: bridge.available_drivers || [],
       status: bridge.status || "offline",
       current_run_id: bridge.current_run_id || "",
@@ -432,6 +434,7 @@ export class BridgesService implements OnModuleInit {
       dry_run: Boolean(body.dry_run),
       model: body.model || "",
       platform: body.platform || "",
+      link_type: body.link_type === "desktop" ? "desktop" : "cli",
       available_drivers: body.available_drivers || [],
       status,
       current_run_id: preservedRun,
@@ -451,6 +454,7 @@ export class BridgesService implements OnModuleInit {
     dry_run?: boolean;
     model?: string;
     platform?: string;
+    link_type?: "cli" | "desktop";
     available_drivers?: string[];
     id?: string;
     status?: BridgeStatus;
@@ -473,6 +477,7 @@ export class BridgesService implements OnModuleInit {
       driver_label?: string;
       dry_run?: boolean;
       model?: string;
+      link_type?: "cli" | "desktop";
     },
   ): Promise<BridgeExecutor> {
     const current = await this.get(id);
@@ -480,6 +485,7 @@ export class BridgesService implements OnModuleInit {
       ...current,
       ...patch,
       team_id: current.team_id,
+      link_type: patch.link_type || current.link_type || "cli",
       base_url: (patch.base_url || current.base_url).replace(/\/$/, ""),
       current_run_id:
         patch.current_run_id !== undefined
@@ -502,6 +508,7 @@ export class BridgesService implements OnModuleInit {
       driver_label: body.driver_label,
       dry_run: body.dry_run,
       model: body.model,
+      link_type: body.link_type,
     });
   }
 
@@ -537,6 +544,7 @@ export class BridgesService implements OnModuleInit {
     install_command: string;
     local_command: string;
     auth_mode: string;
+    link_type: "cli" | "desktop";
     agent_env_key: string;
     token_configured: boolean;
   }> {
@@ -549,6 +557,7 @@ export class BridgesService implements OnModuleInit {
       ? this.toBridge(existingEntity)
       : null;
     const authMode = body.auth_mode || "none";
+    const linkType = body.link_type === "desktop" ? "desktop" : "cli";
     const bridge = await this.write({
       id,
       team_id: body.team_id,
@@ -559,6 +568,7 @@ export class BridgesService implements OnModuleInit {
       dry_run: false,
       model: existing?.model || "",
       platform: existing?.platform || "",
+      link_type: linkType,
       available_drivers: existing?.available_drivers || [],
       status:
         existing?.status === "online" || existing?.status === "busy"
@@ -570,7 +580,7 @@ export class BridgesService implements OnModuleInit {
       note:
         body.note ||
         existing?.note ||
-        `prepared from Studio UI (auth=${authMode})`,
+        `prepared from Studio UI (auth=${authMode}, link=${linkType})`,
     });
 
     const token = this.expectedToken || "<STUDIO_BRIDGE_TOKEN>";
@@ -611,6 +621,7 @@ export class BridgesService implements OnModuleInit {
       install_command: `npx @agent-studio/bridge ${args}`,
       local_command: `npm run bridge -- ${args}`,
       auth_mode: authMode,
+      link_type: linkType,
       agent_env_key: agentEnvKey,
       token_configured: this.tokenConfigured(),
     };

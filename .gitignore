@@ -12,3 +12,9 @@ packages/*/node_modules/
 packages/*/dist/
 .bridge-data/
 packages/bridge/.tmp-ws-*/
+
+# leftover local Dify tree (removed from repo; ignore if recreated)
+deploy/dify/
+
+# leftover local GitLab compose (removed from repo)
+deploy/gitlab/

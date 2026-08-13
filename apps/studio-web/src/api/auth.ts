@@ -1,6 +1,7 @@
 import { del, get, patch, post } from "../http";
 import type {
   AuthLoginResponse,
+  AuthProfileUpdateResponse,
   AuthUserPublic,
   TeamCreate,
   TeamDetail,
@@ -22,6 +23,13 @@ export const authApi = {
   },
   me() {
     return get<AuthUserPublic>("/auth/me");
+  },
+  updateProfile(body: {
+    display_name?: string;
+    current_password?: string;
+    new_password?: string;
+  }) {
+    return patch<AuthProfileUpdateResponse>("/auth/me", body);
   },
 };
 

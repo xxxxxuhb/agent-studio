@@ -86,7 +86,7 @@ const PAGE_META: Record<
   "/settings": {
     label: "设置",
     icon: <SettingOutlined />,
-    hint: "Bridge / Git / 语言",
+    hint: "个人账号与团队 Bridge / Git",
   },
 };
 
@@ -108,6 +108,15 @@ function Shell() {
         navigate("/login", { replace: true });
       });
   }, [navigate]);
+
+  useEffect(() => {
+    const onUser = (e: Event) => {
+      const detail = (e as CustomEvent<StoredUser>).detail;
+      if (detail?.id) setUser(detail);
+    };
+    window.addEventListener("studio-user-updated", onUser);
+    return () => window.removeEventListener("studio-user-updated", onUser);
+  }, []);
 
   const menuItems = useMemo(() => {
     const items = [
@@ -188,7 +197,17 @@ function Shell() {
             >
               切换团队
             </Button>
-            <div className="user-chip">
+            <div
+              className="user-chip"
+              role="button"
+              tabIndex={0}
+              title="个人设置"
+              onClick={() => navigate("/settings")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") navigate("/settings");
+              }}
+              style={{ cursor: "pointer" }}
+            >
               <Avatar size={26} icon={<UserOutlined />}>
                 {(user?.display_name || user?.username || "?").slice(0, 1)}
               </Avatar>

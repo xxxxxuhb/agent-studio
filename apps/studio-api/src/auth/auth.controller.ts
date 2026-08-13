@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Patch, Post } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { CurrentUser, type RequestUser } from "./current-user.decorator";
 import { Public } from "./public.decorator";
@@ -22,5 +22,10 @@ export class AuthController {
   @Get("me")
   me(@CurrentUser() user: RequestUser) {
     return this.auth.me(user.id);
+  }
+
+  @Patch("me")
+  updateProfile(@CurrentUser() user: RequestUser, @Body() body: unknown) {
+    return this.auth.updateProfile(user.id, body);
   }
 }

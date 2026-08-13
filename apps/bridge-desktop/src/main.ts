@@ -9,6 +9,21 @@ type BridgeStatus = {
   detail: string;
   healthUrl: string;
   bridgeCwd: string;
+  nodeOk: boolean;
+  binOk: boolean;
+  cwdOk: boolean;
+};
+
+type PathProbe = {
+  repoRoot: string | null;
+  nodePath: string;
+  nodeOk: boolean;
+  bridgeBin: string;
+  binOk: boolean;
+  bridgeCwd: string;
+  cwdOk: boolean;
+  envOk: boolean;
+  hints: string[];
 };
 
 const $ = <T extends HTMLElement>(id: string) =>
@@ -50,6 +65,15 @@ function render(status: BridgeStatus) {
   if (driverEl) driverEl.textContent = status.driver ?? "—";
   const nameEl = $("meta-name");
   if (nameEl) nameEl.textContent = status.name ?? "—";
+  const pathsEl = $("meta-paths");
+  if (pathsEl) {
+    const flags = [
+      status.nodeOk ? "node✓" : "node✗",
+      status.binOk ? "bin✓" : "bin✗",
+      status.cwdOk ? "cwd✓" : "cwd✗",
+    ];
+    pathsEl.textContent = flags.join(" · ");
+  }
   const urlEl = $("meta-health-url");
   if (urlEl) urlEl.textContent = status.healthUrl;
   const cwdEl = $("meta-cwd");
@@ -66,14 +90,46 @@ function render(status: BridgeStatus) {
   if (stopBtn) stopBtn.disabled = !status.processAlive;
 }
 
+function renderHints(probe: PathProbe) {
+  const el = $("path-hints");
+  if (!el) return;
+  if (!probe.hints.length) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = probe.hints.join(" · ");
+}
+
+async function refreshLogs() {
+  const view = $("log-view");
+  if (!view) return;
+  try {
+    const lines = await invoke<string[]>("bridge_logs");
+    const text = lines.join("\n");
+    const nearBottom =
+      view.scrollHeight - view.scrollTop - view.clientHeight < 48;
+    view.textContent = text || "（尚无日志）";
+    if (nearBottom) view.scrollTop = view.scrollHeight;
+  } catch {
+    /* ignore poll errors */
+  }
+}
+
 async function refresh(opts?: { clearError?: boolean }) {
   try {
-    const status = await invoke<BridgeStatus>("bridge_status");
+    const [status, probe] = await Promise.all([
+      invoke<BridgeStatus>("bridge_status"),
+      invoke<PathProbe>("probe_paths"),
+    ]);
     render(status);
+    renderHints(probe);
     if (opts?.clearError) setError(null);
   } catch (e) {
     setError(String(e));
   }
+  await refreshLogs();
 }
 
 async function start() {
@@ -85,6 +141,7 @@ async function start() {
     setError(String(e));
     await refresh();
   }
+  await refreshLogs();
 }
 
 async function stop() {
@@ -96,6 +153,7 @@ async function stop() {
     setError(String(e));
     await refresh();
   }
+  await refreshLogs();
 }
 
 async function openCwd() {
@@ -107,11 +165,32 @@ async function openCwd() {
   }
 }
 
+async function resetPaths() {
+  setError(null);
+  try {
+    await invoke("reset_config");
+    await refresh({ clearError: true });
+  } catch (e) {
+    setError(String(e));
+  }
+}
+
+async function clearLogs() {
+  try {
+    await invoke("clear_bridge_logs");
+    await refreshLogs();
+  } catch (e) {
+    setError(String(e));
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   $("btn-start")?.addEventListener("click", () => void start());
   $("btn-stop")?.addEventListener("click", () => void stop());
   $("btn-refresh")?.addEventListener("click", () => void refresh());
   $("btn-open-cwd")?.addEventListener("click", () => void openCwd());
+  $("btn-reset-paths")?.addEventListener("click", () => void resetPaths());
+  $("btn-clear-logs")?.addEventListener("click", () => void clearLogs());
   void refresh({ clearError: true });
   window.setInterval(() => void refresh(), 2000);
 });

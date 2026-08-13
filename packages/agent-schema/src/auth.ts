@@ -31,3 +31,38 @@ export const AuthLoginResponseSchema = z.object({
   user: AuthUserPublicSchema,
 });
 export type AuthLoginResponse = z.infer<typeof AuthLoginResponseSchema>;
+
+/** Self-service profile update (display name + optional password change). */
+export const AuthProfileUpdateSchema = z
+  .object({
+    display_name: z.string().max(128).optional(),
+    current_password: z.string().min(1).optional(),
+    new_password: z.string().min(6).max(128).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const changingPw = Boolean(v.new_password);
+    if (changingPw && !v.current_password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "修改密码需填写当前密码",
+        path: ["current_password"],
+      });
+    }
+    if (v.current_password && !v.new_password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "请填写新密码",
+        path: ["new_password"],
+      });
+    }
+  });
+export type AuthProfileUpdate = z.infer<typeof AuthProfileUpdateSchema>;
+
+export const AuthProfileUpdateResponseSchema = z.object({
+  user: AuthUserPublicSchema,
+  /** Fresh JWT when profile fields embedded in token change. */
+  token: z.string().min(1).optional(),
+});
+export type AuthProfileUpdateResponse = z.infer<
+  typeof AuthProfileUpdateResponseSchema
+>;

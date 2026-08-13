@@ -4,8 +4,11 @@ import { parseAgentOutput } from "../work-orders/parseAgentOutput";
 
 type Props = {
   output: string;
-  /** Cap height for scrollable panels */
-  maxHeight?: number;
+  /**
+   * Cap height for scrollable panels.
+   * Omit for default 420; pass `null` for unconstrained (parent scrolls).
+   */
+  maxHeight?: number | string | null;
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -23,8 +26,12 @@ const STATUS_COLOR: Record<string, string> = {
  * Beautified agent step output.
  * Handles Bridge JSON ({ runId, stage, status, summary }) and plain Markdown / text.
  */
-export function AgentOutputView({ output, maxHeight = 420 }: Props) {
+export function AgentOutputView({ output, maxHeight }: Props) {
   const parsed = parseAgentOutput(output);
+  const boxStyle =
+    maxHeight === null
+      ? undefined
+      : { maxHeight: maxHeight ?? 420, overflow: "auto" as const };
 
   if (!parsed.body && parsed.kind !== "structured") {
     return <Typography.Text type="secondary">（空产出）</Typography.Text>;
@@ -33,7 +40,7 @@ export function AgentOutputView({ output, maxHeight = 420 }: Props) {
   if (parsed.kind === "structured") {
     const status = parsed.meta.status || parsed.meta.Status;
     return (
-      <div className="agent-output" style={{ maxHeight, overflow: "auto" }}>
+      <div className="agent-output" style={boxStyle}>
         <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
           {parsed.meta.runId || parsed.meta.run_id ? (
             <Tag color="blue">run {parsed.meta.runId || parsed.meta.run_id}</Tag>
@@ -73,7 +80,7 @@ export function AgentOutputView({ output, maxHeight = 420 }: Props) {
 
   if (parsed.kind === "markdown") {
     return (
-      <div className="agent-output" style={{ maxHeight, overflow: "auto" }}>
+      <div className="agent-output" style={boxStyle}>
         <MarkdownBody content={parsed.body} />
       </div>
     );
@@ -81,14 +88,14 @@ export function AgentOutputView({ output, maxHeight = 420 }: Props) {
 
   if (parsed.kind === "json") {
     return (
-      <pre className="agent-output-pre" style={{ maxHeight, overflow: "auto" }}>
+      <pre className="agent-output-pre" style={boxStyle}>
         {parsed.pretty}
       </pre>
     );
   }
 
   return (
-    <pre className="agent-output-pre" style={{ maxHeight, overflow: "auto" }}>
+    <pre className="agent-output-pre" style={boxStyle}>
       {parsed.body}
     </pre>
   );

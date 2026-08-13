@@ -42,9 +42,14 @@ export const workOrdersApi = {
       agents_md_path?: string;
       bridge_base_url?: string;
       feedback?: string;
+      reselect_repos?: boolean;
     } = {},
   ) {
     return post<WorkOrder>(`/work-orders/${id}/restart`, body, { timeout: 60_000 });
+  },
+  /** Resume failed stage on the same Bridge run. */
+  resume(id: string, body: { feedback?: string } = {}) {
+    return post<WorkOrder>(`/work-orders/${id}/resume`, body, { timeout: 60_000 });
   },
   cancel(id: string, feedback = "手动结束运行") {
     return post<WorkOrder>(`/work-orders/${id}/cancel`, { feedback });
