@@ -79,7 +79,7 @@ export function PipelineFlowModal({
           </Space>
         ) : (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 10 }}>
-          含开始 / 结束节点；步骤上标注人工确认或自动推进；虚线红边表示驳回跳转。
+          左侧物料拖到画布加点；步骤标注类型；虚线红边为驳回跳转。
         </Typography.Paragraph>
         )}
         <PipelineFlowView

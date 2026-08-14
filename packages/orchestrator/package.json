@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/stage-map.test.js dist/runner.test.js dist/golden-path.test.js"
+    "test": "npm run build && node --test dist/stage-map.test.js dist/runner.test.js dist/graph.test.js dist/golden-path.test.js"
   },
   "engines": {
     "node": ">=20"

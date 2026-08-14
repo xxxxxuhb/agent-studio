@@ -11,6 +11,7 @@ import { RunLogsModule } from "./run-logs/run-logs.module";
 import { StudioConfigModule } from "./studio-config/studio-config.module";
 import { TeamsModule } from "./teams/teams.module";
 import { WorkOrdersModule } from "./work-orders/work-orders.module";
+import { TriggersModule } from "./triggers/triggers.module";
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { WorkOrdersModule } from "./work-orders/work-orders.module";
     BridgesModule,
     WorkOrdersModule,
     StudioConfigModule,
+    TriggersModule,
   ],
   controllers: [HealthController],
 })

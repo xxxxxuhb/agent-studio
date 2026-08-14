@@ -1,3 +1,14 @@
+import type {
+  PipelineCiStep,
+  PipelineDelayStep,
+  PipelineEdge,
+  PipelineHttpStep,
+  PipelineStepBranch,
+  PipelineStepKind,
+  PipelineStepParallel,
+  PipelineWaitEventStep,
+} from "@agent-studio/agent-schema";
+
 export type BridgeStage =
   | "manager"
   | "requirement"
@@ -47,9 +58,18 @@ export type OrchestratorStep = {
   step_id: string;
   agent: string;
   label?: string;
+  kind?: PipelineStepKind;
   human_approval: boolean;
   on_reject?: "end" | "retry_step" | "goto";
   reject_goto?: string;
+  /** Approve-side branches (mirrored into graph edges when synthesizing). */
+  branches?: PipelineStepBranch[];
+  /** Fan-out after this step (review ∥ test → join). */
+  parallel?: PipelineStepParallel | null;
+  http?: PipelineHttpStep | null;
+  wait_event?: PipelineWaitEventStep | null;
+  ci?: PipelineCiStep | null;
+  delay?: PipelineDelayStep | null;
 };
 
 export type OrchestratorAgentLookup = {
@@ -78,6 +98,23 @@ export type OrchestratorProgress = {
   stage: string;
   summary: string;
   stage_result?: StageResult;
+  /**
+   * How we arrived at this step (for Studio status bookkeeping).
+   * - advance: happy-path next edge
+   * - retry: same step after reject
+   * - goto_reject: reject edge to another step
+   * - start / resume: initial entry into a step
+   */
+  transition?:
+    | "start"
+    | "advance"
+    | "retry"
+    | "goto_reject"
+    | "resume"
+    | "parallel";
+  from_step_index?: number;
+  /** Parallel fan-out: all branch indices currently executing. */
+  active_step_indices?: number[];
 };
 
 export type StartStudioRunInput = {
@@ -90,6 +127,13 @@ export type StartStudioRunInput = {
   bridge_base_url: string;
   /** When true, do not pause for human_approval (auto-continue). */
   auto_approve?: boolean;
+  /** Optional graph; empty edges → synthesize linear + reject from steps. */
+  entry?: string;
+  edges?: PipelineEdge[];
+  /** Template vars for http/ci steps. */
+  work_order_id?: string;
+  run_id?: string;
+  title?: string;
   /** Fired after createRun and after each successful stage (for live UI). */
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
 };
@@ -103,6 +147,12 @@ export type ApplyDecisionInput = {
   decision: "approve" | "reject";
   feedback?: string;
   auto_approve?: boolean;
+  entry?: string;
+  edges?: PipelineEdge[];
+  work_order_id?: string;
+  run_id?: string;
+  title?: string;
+  raw_requirement?: string;
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
 };
 
@@ -115,6 +165,32 @@ export type ResumeStudioRunInput = {
   current_step_index: number;
   feedback?: string;
   auto_approve?: boolean;
+  entry?: string;
+  edges?: PipelineEdge[];
+  work_order_id?: string;
+  run_id?: string;
+  title?: string;
+  raw_requirement?: string;
+  onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
+};
+
+/** Resume a wait_event step when an external event arrives. */
+export type ApplyStudioEventInput = {
+  bridge: BridgeClient;
+  steps: OrchestratorStep[];
+  agents: OrchestratorAgentLookup;
+  state: StudioRunState;
+  current_step_index: number;
+  event: "mr_merged" | "issue_labeled" | "manual";
+  labels?: string[];
+  feedback?: string;
+  auto_approve?: boolean;
+  entry?: string;
+  edges?: PipelineEdge[];
+  work_order_id?: string;
+  run_id?: string;
+  title?: string;
+  raw_requirement?: string;
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
 };
 
@@ -126,6 +202,14 @@ export type OrchestratorOutcome =
       stage: string;
       summary: string;
       stage_result: StageResult;
+    }
+  | {
+      kind: "waiting_event";
+      state: StudioRunState;
+      step_index: number;
+      stage: string;
+      summary: string;
+      event: string;
     }
   | {
       kind: "running";

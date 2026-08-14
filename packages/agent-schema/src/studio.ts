@@ -39,11 +39,14 @@ export const TeamSecretsSchema = z
     git_prefer_ssh: z.boolean().optional(),
     git_ssh_port: z.number().int().nonnegative().optional(),
     git_ssh_user: z.string().optional().default(""),
+    /** Shared secret for POST /webhooks/pipelines/:id/forge (GitLab token / Studio token). */
+    forge_webhook_secret: z.string().optional().default(""),
   })
   .passthrough();
 export type TeamSecrets = z.infer<typeof TeamSecretsSchema>;
 
 export const TeamSecretsPublicSchema = TeamSecretsSchema.extend({
   git_ssh_key_path_set: z.boolean().default(false),
-});
+  forge_webhook_secret_set: z.boolean().default(false),
+}).omit({ forge_webhook_secret: true });
 export type TeamSecretsPublic = z.infer<typeof TeamSecretsPublicSchema>;

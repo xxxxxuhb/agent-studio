@@ -73,10 +73,71 @@ UI「设置」或 `STUDIO_GIT_*`：仅影响 Studio 本机调试克隆（`ensure
 
 ---
 
-## 5. 常见问题
+## 5. 入站 Webhook / 定时开工单
+
+Studio 可按流水线 `triggers` 自动 **创建并启动** 工单（不经 JWT）。
+
+### Forge webhook
+
+```http
+POST /api/webhooks/pipelines/{pipelineId}/forge
+X-Gitlab-Token: <secret>          # GitLab
+# 或 X-Studio-Webhook-Token: <secret>
+# 或 X-Hub-Signature-256: sha256=…  # GitHub HMAC
+```
+
+Secret 优先级：触发器 `secret` → 团队 YAML `forge_webhook_secret` → 环境变量 `STUDIO_FORGE_WEBHOOK_SECRET`。
+
+流水线示例（保存到 pipeline.triggers）：
+
+```json
+[{
+  "id": "mr_done",
+  "kind": "forge_webhook",
+  "enabled": true,
+  "forge": "gitlab",
+  "events": ["mr_merged", "issue_labeled"],
+  "labels": ["agent-studio"],
+  "action": "create_and_start",
+  "project_id": "",
+  "auto_approve": false,
+  "secret": "change-me",
+  "title_template": "{{event}} · {{title}}",
+  "requirement_template": "{{url}}\n\n{{body}}"
+}]
+```
+
+`action`：
+
+- `create_and_start`（默认）：新建工单并启动流水线。
+- `advance`：推进该流水线上处于 `waiting`、且当前步为匹配的 `wait_event` 的工单（用于「等 MR 合并」类步骤）。
+
+支持事件：`mr_merged`（GitLab MR merge / GitHub PR merged）、`issue_labeled`。
+
+### Cron
+
+```json
+[{
+  "id": "weekday_morning",
+  "kind": "cron",
+  "enabled": true,
+  "cron": "0 9 * * 1-5",
+  "project_id": "",
+  "auto_approve": false,
+  "title_template": "定时 · {{pipeline}} · {{time}}"
+}]
+```
+
+API 进程内每 30s 扫一次（`STUDIO_TRIGGERS_CRON=false` 可关）。五段 cron：`分 时 日 月 周`。
+
+---
+
+## 6. 常见问题
 
 | 现象 | 排查 |
 |------|------|
 | `Permission denied (publickey)` | 公钥是否挂到 Forge；`BRIDGE_GIT_SSH_KEY` / 端口是否匹配 remote |
 | 能 push 不开 MR | `GITLAB_TOKEN` / `GITHUB_TOKEN` 权限；`BRIDGE_GITLAB_API`/`WEB` 是否指向同一实例 |
 | 仍在找 `deploy/gitlab` | 已移除；改配外部 Forge，见上文 |
+| webhook 401 | secret 是否与 `X-Gitlab-Token` / `STUDIO_FORGE_WEBHOOK_SECRET` 一致 |
+| cron 不触发 | 流水线 `enabled` + trigger `enabled`；API 进程是否在跑；`cron` 五段是否匹配本机时区 |

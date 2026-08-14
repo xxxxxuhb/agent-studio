@@ -4,6 +4,15 @@ import {
   PipelineDifyBindingPublicSchema,
   PipelineDifyBindingSchema,
 } from "./dify";
+import { PipelineEdgeSchema, PipelineStepBranchSchema, PipelineStepParallelSchema } from "./pipeline-graph";
+import { PipelineTriggerSchema } from "./pipeline-triggers";
+import {
+  PipelineCiStepSchema,
+  PipelineDelayStepSchema,
+  PipelineHttpStepSchema,
+  PipelineStepKindSchema,
+  PipelineWaitEventStepSchema,
+} from "./pipeline-step-kinds";
 
 export const RoleSchema = z.enum([
   "intake",
@@ -89,17 +98,78 @@ export type DigitalHumanUpdate = z.infer<typeof DigitalHumanUpdateSchema>;
 
 export const ROLES = RoleSchema.options;
 
-export const PipelineStepSchema = z.object({
-  id: z
-    .string()
-    .regex(/^[a-z][a-z0-9_]*$/, "step id must be snake_case"),
-  agent: z.string().min(1),
-  label: z.string().optional().default(""),
-  human_approval: z.boolean().default(true),
-  on_reject: z.enum(["end", "retry_step", "goto"]).default("end"),
-  reject_goto: z.string().optional(),
-  inputs_from: z.array(z.string()).default([]),
-});
+export const PipelineStepSchema = z
+  .object({
+    id: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]*$/, "step id must be snake_case"),
+    /** Default agent; empty allowed for non-agent kinds. */
+    agent: z.string().optional().default(""),
+    label: z.string().optional().default(""),
+    kind: PipelineStepKindSchema.optional().default("agent"),
+    human_approval: z.boolean().default(true),
+    on_reject: z.enum(["end", "retry_step", "goto"]).default("end"),
+    reject_goto: z.string().optional(),
+    inputs_from: z.array(z.string()).default([]),
+    /**
+     * Explicit default successor (step id or `__end__`).
+     * `null` / `""` = no default next edge (user wires manually).
+     * `undefined` = legacy: synthesize linear next from step order.
+     */
+    next: z.string().optional().nullable(),
+    /**
+     * Approve-side conditional branches (compiled to `cond` edges on synthesize).
+     * Evaluated in order; first match wins, then default `next` edge.
+     */
+    branches: z.array(PipelineStepBranchSchema).optional(),
+    /**
+     * Fan-out: after this step, run `branches` concurrently then join to `then`.
+     * Mutually exclusive with cond `branches` on the same step.
+     */
+    parallel: PipelineStepParallelSchema.optional().nullable(),
+    http: PipelineHttpStepSchema.optional().nullable(),
+    wait_event: PipelineWaitEventStepSchema.optional().nullable(),
+    ci: PipelineCiStepSchema.optional().nullable(),
+    delay: PipelineDelayStepSchema.optional().nullable(),
+  })
+  .superRefine((step, ctx) => {
+    const kind = step.kind || "agent";
+    if (kind === "agent" && !(step.agent || "").trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "agent step requires agent id",
+        path: ["agent"],
+      });
+    }
+    if (kind === "http" && !step.http?.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "http step requires http.url",
+        path: ["http"],
+      });
+    }
+    if (kind === "wait_event" && !step.wait_event?.event) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "wait_event step requires wait_event.event",
+        path: ["wait_event"],
+      });
+    }
+    if (kind === "ci" && !step.ci?.trigger_url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ci step requires ci.trigger_url",
+        path: ["ci"],
+      });
+    }
+    if (kind === "delay" && !(step.delay?.seconds && step.delay.seconds > 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "delay step requires delay.seconds > 0",
+        path: ["delay"],
+      });
+    }
+  });
 export type PipelineStep = z.infer<typeof PipelineStepSchema>;
 
 export const PipelineSchema = z.object({
@@ -126,6 +196,19 @@ export const PipelineSchema = z.object({
     })
     .default({ human_approval: true, on_reject: "end" }),
   steps: z.array(PipelineStepSchema).min(1),
+  /**
+   * Entry step id. Empty → first step. Used with `edges` for graph control flow.
+   */
+  entry: z.string().optional().default(""),
+  /**
+   * Explicit control-flow edges. Empty → synthesized as linear `next` + reject arcs
+   * from `steps` / `on_reject` / `reject_goto` (see `normalizePipelineGraph`).
+   */
+  edges: z.array(PipelineEdgeSchema).optional().default([]),
+  /**
+   * Automation: cron schedules and Forge inbound webhooks that create+start work orders.
+   */
+  triggers: z.array(PipelineTriggerSchema).optional().default([]),
   /** Legacy Dify Workflow binding (ignored by Studio orchestrator). */
   dify: PipelineDifyBindingSchema.optional().default({}),
   updated_at: z.string().optional(),
@@ -167,6 +250,7 @@ export const WorkOrderStatusSchema = z.enum([
   "queued",
   "running",
   "pending_approval",
+  "waiting",
   "completed",
   "rejected",
   "failed",
@@ -178,6 +262,7 @@ export const RunStepStatusSchema = z.enum([
   "pending",
   "running",
   "pending_approval",
+  "waiting",
   "approved",
   "rejected",
   "failed",
@@ -187,8 +272,9 @@ export type RunStepStatus = z.infer<typeof RunStepStatusSchema>;
 
 export const WorkOrderRunStepSchema = z.object({
   step_id: z.string(),
-  agent: z.string(),
+  agent: z.string().default(""),
   label: z.string().default(""),
+  kind: PipelineStepKindSchema.optional().default("agent"),
   human_approval: z.boolean().default(true),
   on_reject: z.enum(["end", "retry_step", "goto"]).default("end"),
   reject_goto: z.string().optional(),
@@ -203,6 +289,12 @@ export const WorkOrderRunStepSchema = z.object({
   feedback: z.string().default(""),
   started_at: z.string().optional(),
   finished_at: z.string().optional(),
+  /** Copied from pipeline step for parallel fan-out at runtime. */
+  parallel: PipelineStepParallelSchema.optional().nullable(),
+  http: PipelineHttpStepSchema.optional().nullable(),
+  wait_event: PipelineWaitEventStepSchema.optional().nullable(),
+  ci: PipelineCiStepSchema.optional().nullable(),
+  delay: PipelineDelayStepSchema.optional().nullable(),
 });
 export type WorkOrderRunStep = z.infer<typeof WorkOrderRunStepSchema>;
 
@@ -311,7 +403,13 @@ export const WorkOrderRunSchema = z.object({
    */
   auto_approve: z.boolean().optional().default(false),
   current_step_index: z.number().int().nonnegative().default(0),
+  /** When fan-out is in flight, all active branch indices (UI highlight). */
+  active_step_indices: z.array(z.number().int().nonnegative()).optional().default([]),
   steps: z.array(WorkOrderRunStepSchema).default([]),
+  /** Entry step id for this run's graph (empty → steps[0]). */
+  entry: z.string().optional().default(""),
+  /** Control-flow edges snapshot (linear + reject synthesized at start if empty). */
+  edges: z.array(PipelineEdgeSchema).optional().default([]),
   started_at: z.string(),
   finished_at: z.string().optional(),
   /** Repo commit state produced by agents (e.g. code_review may_commit). */
@@ -680,6 +778,35 @@ export {
 } from "./studio";
 
 export {
+  PipelineStepKindSchema,
+  PipelineHttpStepSchema,
+  PipelineWaitEventStepSchema,
+  PipelineCiStepSchema,
+  PipelineDelayStepSchema,
+  type PipelineStepKind,
+  type PipelineHttpStep,
+  type PipelineWaitEventStep,
+  type PipelineCiStep,
+  type PipelineDelayStep,
+} from "./pipeline-step-kinds";
+
+export {
+  PipelineTriggerKindSchema,
+  ForgeWebhookEventSchema,
+  PipelineCronTriggerSchema,
+  PipelineForgeWebhookTriggerSchema,
+  PipelineTriggerSchema,
+  parseCronExpression,
+  cronMatches,
+  renderTriggerTemplate,
+  type PipelineTriggerKind,
+  type ForgeWebhookEvent,
+  type PipelineCronTrigger,
+  type PipelineForgeWebhookTrigger,
+  type PipelineTrigger,
+} from "./pipeline-triggers";
+
+export {
   parseOpenQuestions,
   suggestOptions,
   formatOpenQuestionFeedback,
@@ -687,3 +814,30 @@ export {
   type OpenQuestion,
   type OpenQuestionAnswer,
 } from "./open-questions";
+
+export {
+  PIPELINE_GRAPH_START,
+  PIPELINE_GRAPH_END,
+  PipelineEdgeKindSchema,
+  PipelineEdgeSchema,
+  PipelineConditionSchema,
+  PipelineStepBranchSchema,
+  PipelineStepParallelSchema,
+  synthesizePipelineEdges,
+  normalizePipelineGraph,
+  validatePipelineGraph,
+  evaluatePipelineCondition,
+  resolveNextEdge,
+  resolveCondEdges,
+  resolveApproveEdge,
+  resolveRejectEdge,
+  syncRejectFieldsFromEdges,
+  syncBranchesFromEdges,
+  type PipelineEdgeKind,
+  type PipelineEdge,
+  type PipelineCondition,
+  type PipelineConditionContext,
+  type PipelineStepBranch,
+  type PipelineStepParallel,
+  type PipelineGraphInput,
+} from "./pipeline-graph";

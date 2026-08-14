@@ -987,11 +987,31 @@ body {
 }
 
 .pipeline-flow-canvas .react-flow__edge-text {
-  pointer-events: none;
+  pointer-events: all;
+  cursor: pointer;
 }
 
 .pipeline-flow-canvas .react-flow__edge-path {
   stroke-linecap: round;
+  cursor: pointer;
+}
+
+.pipeline-flow-canvas .react-flow__edge.selected .react-flow__edge-path,
+.pipeline-flow-canvas .react-flow__edge:focus .react-flow__edge-path,
+.pipeline-flow-canvas .react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: #1677ff !important;
+  stroke-width: 3.5 !important;
+  filter: drop-shadow(0 0 3px rgba(22, 119, 255, 0.45));
+}
+
+.pipeline-flow-canvas .react-flow__edge.selected .react-flow__edge-text,
+.pipeline-flow-canvas .react-flow__edge:focus .react-flow__edge-text {
+  fill: #1677ff !important;
+  font-weight: 650 !important;
+}
+
+.pipeline-flow-canvas .react-flow__edge.selected .react-flow__edge-textbg {
+  fill: #e6f4ff;
 }
 
 .pipeline-flow-canvas .react-flow__attribution {
@@ -1082,6 +1102,32 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pipeline-flow-node--kind-agent {
+  border-left: 3px solid #1677ff;
+}
+
+.pipeline-flow-node--kind-http {
+  border-left: 3px solid #722ed1;
+}
+
+.pipeline-flow-node--kind-wait_event {
+  border-left: 3px solid #13c2c2;
+}
+
+.pipeline-flow-node--kind-ci {
+  border-left: 3px solid #2f54eb;
+}
+
+.pipeline-flow-node--kind-gateway {
+  border-left: 3px solid #fa8c16;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #fffbe6 0%, #fff 55%);
+}
+
+.pipeline-flow-node--kind-delay {
+  border-left: 3px solid #597ef7;
 }
 
 .pipeline-flow-node__meta {
@@ -1196,6 +1242,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  height: 100%;
+  min-height: 420px;
 }
 
 .pipeline-flow-editor__toolbar {
@@ -1204,39 +1252,222 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 .pipeline-flow-editor__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 12px;
+  position: relative;
+  display: flex;
   min-height: 0;
+  flex: 1 1 auto;
 }
 
-@media (max-width: 960px) {
-  .pipeline-flow-editor__body {
-    grid-template-columns: 1fr;
-  }
+.pipeline-flow-editor__canvas {
+  position: relative;
+  min-height: 0;
+  height: 100% !important;
+  flex: 1 1 auto;
+  width: 100%;
 }
 
-.pipeline-flow-editor__inspector {
-  border: 1px solid #e8ecf2;
-  border-radius: 10px;
-  background: #fff;
-  padding: 12px;
-  min-height: 280px;
+.pipeline-flow-editor__float {
+  position: absolute;
+  z-index: 6;
+  pointer-events: auto;
 }
 
-.pipeline-flow-editor__inspector-empty {
-  color: rgba(0, 0, 0, 0.45);
-  font-size: 13px;
-  padding: 24px 8px;
-  text-align: center;
+.pipeline-flow-editor__float--palette {
+  top: 12px;
+  left: 12px;
+  bottom: 12px;
+  width: 156px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-flow-editor__float--palette .pipeline-flow-palette {
+  height: 100%;
+  max-height: 100%;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(8px);
+  background: rgba(250, 251, 253, 0.96);
 }
 
 .pipeline-flow-editor-modal .ant-modal-content {
   max-width: 1280px;
   margin: 0 auto;
+}
+
+.pipeline-flow-editor-modal__form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: 0;
+  height: 100%;
+}
+
+.pipeline-flow-editor-modal__meta {
+  flex: 0 0 auto;
+}
+
+.pipeline-flow-editor-modal__meta .ant-form-item {
+  margin-bottom: 6px;
+}
+
+.pipeline-flow-editor-modal__flow {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0 !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-flow-editor-modal__flow .ant-form-item-row,
+.pipeline-flow-editor-modal__flow .ant-form-item-control,
+.pipeline-flow-editor-modal__flow .ant-form-item-control-input,
+.pipeline-flow-editor-modal__flow .ant-form-item-control-input-content {
+  height: 100%;
+  min-height: 0;
+}
+
+.pipeline-flow-editor-modal__flow .ant-form-item-control-input-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-flow-editor-modal__triggers {
+  flex: 0 0 auto;
+  margin: 0 !important;
+  border-top: 1px solid #f0f0f0;
+}
+
+.pipeline-flow-editor-modal__triggers .ant-collapse-header {
+  padding: 6px 0 !important;
+  font-size: 12px !important;
+  color: rgba(0, 0, 0, 0.55) !important;
+}
+
+.pipeline-flow-editor-modal__triggers .ant-collapse-content-box {
+  padding: 0 0 8px !important;
+}
+
+.pipeline-flow-palette__item--terminal-start {
+  border-left-color: #1677ff;
+}
+
+.pipeline-flow-palette__item--terminal-end {
+  border-left-color: #52c41a;
+}
+
+@media (max-width: 720px) {
+  .pipeline-flow-editor__float--palette {
+    width: min(156px, calc(100% - 24px));
+  }
+}
+
+.pipeline-flow-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: inherit;
+  padding: 10px;
+  border: 1px solid #e8ecf2;
+  border-radius: 10px;
+  background: #fafbfd;
+  overflow: auto;
+}
+
+.pipeline-flow-palette__title {
+  font-size: 13px;
+  font-weight: 650;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.pipeline-flow-palette__hint {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: -4px;
+}
+
+.pipeline-flow-palette__hint--branch {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fff7e6;
+  color: rgba(0, 0, 0, 0.65);
+  line-height: 1.4;
+}
+
+.pipeline-flow-palette__section {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(0, 0, 0, 0.45);
+  text-transform: uppercase;
+}
+
+.pipeline-flow-palette__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pipeline-flow-palette__list--agents {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.pipeline-flow-palette__item {
+  padding: 8px 10px;
+  border: 1px solid #e8ecf2;
+  border-left: 3px solid #1677ff;
+  border-radius: 8px;
+  background: #fff;
+  cursor: grab;
+  user-select: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.pipeline-flow-palette__item:hover {
+  border-color: #91caff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.pipeline-flow-palette__item:active {
+  cursor: grabbing;
+}
+
+.pipeline-flow-palette__item--agent {
+  border-left-color: #1677ff;
+}
+
+.pipeline-flow-palette__item-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.pipeline-flow-palette__item-desc {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipeline-flow-palette__empty {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.35);
+  padding: 6px 2px;
+}
+
+.pipeline-flow-config-modal .ant-form-item {
+  margin-bottom: 12px;
 }
 
 .pipeline-flow-modal .ant-modal-content {

@@ -13,6 +13,10 @@ import {
   PipelinePublicSchema,
   PipelineSchema,
   PipelineUpdateSchema,
+  normalizePipelineGraph,
+  synthesizePipelineEdges,
+  syncBranchesFromEdges,
+  validatePipelineGraph,
   type Pipeline,
   type PipelineCreate,
   type PipelinePublic,
@@ -46,6 +50,26 @@ export class PipelinesService {
   }
 
   private toPipeline(entity: PipelineEntity): Pipeline {
+    const defaultsRaw = (entity.defaults || {}) as Record<string, unknown>;
+    const {
+      entry: storedEntry,
+      edges: storedEdges,
+      triggers: storedTriggers,
+      ...restDefaults
+    } = defaultsRaw;
+    const graph = normalizePipelineGraph({
+      steps: (entity.steps || []) as Pipeline["steps"],
+      entry: typeof storedEntry === "string" ? storedEntry : "",
+      edges: Array.isArray(storedEdges)
+        ? (storedEdges as Pipeline["edges"])
+        : [],
+    });
+    const onReject =
+      restDefaults.on_reject === "retry_step" ||
+      restDefaults.on_reject === "goto" ||
+      restDefaults.on_reject === "end"
+        ? restDefaults.on_reject
+        : "end";
     return PipelineSchema.parse({
       id: entity.id,
       team_id: entity.team_id || "",
@@ -54,8 +78,20 @@ export class PipelinesService {
       enabled: entity.enabled !== false,
       tags: entity.tags || [],
       source: entity.source || { kind: "handwritten" },
-      defaults: entity.defaults || { human_approval: true, on_reject: "end" },
-      steps: entity.steps || [],
+      defaults: {
+        human_approval:
+          typeof restDefaults.human_approval === "boolean"
+            ? restDefaults.human_approval
+            : true,
+        on_reject: onReject,
+      },
+      steps: syncBranchesFromEdges(
+        (entity.steps || []) as Pipeline["steps"],
+        graph.edges,
+      ),
+      entry: graph.entry,
+      edges: graph.edges,
+      triggers: Array.isArray(storedTriggers) ? storedTriggers : [],
       dify: entity.dify || {},
       created_at: entity.created_at?.toISOString?.() || undefined,
       updated_at: entity.updated_at?.toISOString?.() || undefined,
@@ -63,6 +99,13 @@ export class PipelinesService {
   }
 
   private toEntityFields(pipeline: Pipeline): Partial<PipelineEntity> {
+    // Steps (incl. branches / on_reject) are the authoring source of truth.
+    const entry =
+      (pipeline.entry || "").trim() || pipeline.steps[0]?.id || "";
+    const edges = synthesizePipelineEdges({
+      steps: pipeline.steps,
+      entry,
+    });
     return {
       id: pipeline.id,
       team_id: (pipeline.team_id || "").trim(),
@@ -74,10 +117,15 @@ export class PipelinesService {
         string,
         unknown
       >,
-      defaults: (pipeline.defaults || {
-        human_approval: true,
-        on_reject: "end",
-      }) as Record<string, unknown>,
+      defaults: {
+        ...(pipeline.defaults || {
+          human_approval: true,
+          on_reject: "end",
+        }),
+        entry,
+        edges,
+        triggers: pipeline.triggers || [],
+      } as Record<string, unknown>,
       steps: pipeline.steps || [],
       dify: (pipeline.dify || {}) as Record<string, unknown>,
       created_at: pipeline.created_at
@@ -92,15 +140,36 @@ export class PipelinesService {
   private async assertAgentsExist(steps: Pipeline["steps"]) {
     const missing: string[] = [];
     for (const s of steps) {
+      if ((s.kind || "agent") !== "agent") continue;
+      const agentId = (s.agent || "").trim();
+      if (!agentId) {
+        missing.push("(empty agent)");
+        continue;
+      }
       try {
-        await this.humans.get(s.agent);
+        await this.humans.get(agentId);
       } catch {
-        missing.push(s.agent);
+        missing.push(agentId);
       }
     }
     const unique = [...new Set(missing)];
     if (unique.length) {
       throw new BadRequestException(`未知数字人: ${unique.join(", ")}`);
+    }
+  }
+
+  private assertGraphValid(pipeline: {
+    steps: Pipeline["steps"];
+    entry?: string;
+    edges?: Pipeline["edges"];
+  }) {
+    const errors = validatePipelineGraph({
+      steps: pipeline.steps,
+      entry: pipeline.entry,
+      edges: pipeline.edges,
+    });
+    if (errors.length) {
+      throw new BadRequestException(errors.join("; "));
     }
   }
 
@@ -137,6 +206,27 @@ export class PipelinesService {
       );
     }
     return items.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /** Internal: enabled pipelines that declare at least one enabled trigger. */
+  async listWithTriggers(): Promise<Pipeline[]> {
+    return (await this.repo.find())
+      .map((e) => this.toPipeline(e))
+      .filter((p) => p.enabled && (p.triggers || []).some((t) => t.enabled));
+  }
+
+  async patchTriggerLastFired(
+    pipelineId: string,
+    triggerId: string,
+    firedAt: string,
+  ): Promise<void> {
+    const pipeline = await this.get(pipelineId);
+    const triggers = (pipeline.triggers || []).map((t) =>
+      t.kind === "cron" && t.id === triggerId
+        ? { ...t, last_fired_at: firedAt }
+        : t,
+    );
+    await this.write({ ...pipeline, triggers });
   }
 
   async listForUser(
@@ -207,6 +297,7 @@ export class PipelinesService {
     const exists = await this.repo.findOne({ where: { id: body.id } });
     if (exists) throw new ConflictException(`already exists: ${body.id}`);
     await this.assertAgentsExist(body.steps);
+    this.assertGraphValid(body);
     return this.toPublic(await this.write(body as Pipeline));
   }
 
@@ -253,6 +344,7 @@ export class PipelinesService {
         dify: nextDify,
       });
       await this.assertAgentsExist(merged.steps);
+      this.assertGraphValid(merged);
       return this.toPublic(await this.write(merged));
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
@@ -315,6 +407,7 @@ export class PipelinesService {
       }
       try {
         await this.assertAgentsExist(item.steps);
+        this.assertGraphValid(item);
         await this.write(
           PipelineSchema.parse({ ...item, team_id: teamId || "" }),
         );
@@ -389,6 +482,7 @@ export class PipelinesService {
         (generatedBy === "agent" ? "agent" : draft.source?.template_id),
     };
     await this.assertAgentsExist(draft.steps);
+    this.assertGraphValid(draft);
     if (body.save) {
       const exists = await this.repo.findOne({ where: { id: draft.id } });
       if (exists) {
@@ -479,6 +573,7 @@ export class PipelinesService {
       try {
         draft = PipelineCreateSchema.parse(data.draft);
         await this.assertAgentsExist(draft.steps);
+        this.assertGraphValid(draft);
       } catch (err) {
         return {
           ok: false,

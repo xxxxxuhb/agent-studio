@@ -84,12 +84,67 @@ Notes (2026-08-13): 编排主路径已通；本地栈只起 MySQL；Forge 用外
 - [ ] OAuth / SSO
 - [ ] `openai` driver（占位）；按需再做。
 
+### 编排：线性阶段 → 工作流
+
+现状：顺序步骤 + 人工闸门 + 拒绝后 `end` / `retry_step` / `goto`；可视化已有。勿回嵌 Dify，新步骤类型走 orchestrator 插件口。
+
+已完成（Phase 0–1，2026-08-13）：
+- [x] Schema：`Pipeline.edges` / `entry` + `normalizePipelineGraph`（无边则从线性步骤合成）。
+- [x] Orchestrator：按 `next` / `reject` 边推进（支持 approve 跳步）；`goto` / `retry` 单测。
+- [x] 工单 run 快照 edges；Studio progress 按 `transition` 修正 goto 状态（勿把回跳步误标 approved）。
+- [x] 流水线保存校验 `reject_goto` / 边目标；Web 保存时写出合成 edges。
+
+已完成（Phase 2 条件分支，2026-08-13）：
+- [x] `PipelineCondition` + `evaluatePipelineCondition`；步骤 `branches` → `cond` 边。
+- [x] Orchestrator approve：按序匹配 cond（反馈/摘要/产物），否则 `next`。
+- [x] 可视化编辑器：步骤侧栏「通过后条件分支」；预览/画布紫色条件弧。
+
+已完成（Phase 3 并行汇合，2026-08-13）：
+- [x] 步骤 `parallel: { branches, join, then }`；合成 `parallel` 边；分支须关人工闸门。
+- [x] Orchestrator：`Promise.all` 跑并行 stage → join（all/any）→ then。
+- [x] 工单 `active_step_indices`；编辑器多选并行分支 + 汇合策略。
+
+待做：
+- [x] **并行步骤**：如 review 与 test 同时跑，汇合后再进下一阶段。
+- [x] **条件分支**：`cond` 边 + `when`（feedback/summary/artifact）；步骤 `branches` 编辑；运行时先匹配 cond 再走 next。
+- [x] **事件 / 定时触发工单**：`Pipeline.triggers`（cron + forge_webhook）；`POST /api/webhooks/pipelines/:id/forge`；进程内 cron tick。
+- [x] **步骤类型扩展**：`kind` = agent / http / wait_event / ci / delay / gateway；物料面板可拖「条件 / 并行 / 延时 / 定时」；webhook `action=advance` 推进 waiting。
+- [ ] （可选）orchestrator 拆独立 worker 进程，长任务不堵 API。
+
+### 通知与协作
+
+现状：Human Input / 完成需打开 Web；Forge 已接 GitLab/GitHub API。
+
+- [ ] Slack / 飞书 / 邮件：Human Input、失败、完成。
+- [ ] 工单评论 / @人。
+- [ ] MR 评论回写工单。
+- [x] 入站 webhook：MR merged / issue labeled → create+start 或 advance wait_event。
+
+已完成（Phase 4 触发器，2026-08-13）：
+- [x] Schema `Pipeline.triggers`（cron / forge_webhook）+ `cronMatches`。
+- [x] `WorkOrdersService.createAndStartFromTrigger`；TriggersModule webhook + 30s cron。
+- [x] 流水线编辑器 triggers JSON；文档 `docs/对接外部Git.md` §5。
+
+已完成（Phase 5 步骤类型，2026-08-13）：
+- [x] Schema：`PipelineStep.kind` + http / wait_event / ci；工单 status `waiting`。
+- [x] Orchestrator：`executeNonAgentStep` + `applyStudioEvent`；http/ci/wait 单测。
+- [x] Studio：run 快照 kind 配置；waiting outcome；webhook `action=advance`。
+- [x] 编辑器：步骤类型与字段；状态文案「等待事件」。
+
+### 产物与可观测
+
+已有：`artifact_paths` 快照、`commit_url` 外链、日志 Tab、Bridge gc。
+
+- [ ] **产物内容入库**（blob；路径快照在 Bridge gc 后文件会丢）。
+- [ ] **用量 / 成本**：按团队、驱动、工单记 token。
+- [ ] **审计日志**：谁批了、谁改了密钥 / 流水线。
+- [ ] （后置）桌面端公证 / 签名 / 自动更新——见 P1 bridge-desktop。
+
 ### 工程债 / 中期优化
 
 - [x] 继续拆 `work-orders.service`：抽出 `WorkOrderStudioRunner`（start/decide/resume/progress/outcome）；主服务 ~1.5k 行。
 - [x] 设置/密钥叙事清理：SQL README / Skill env 去掉 Dify secrets 主路径；team-secrets 仍 YAML `0600`（MySQL/Vault 后置）。
 - [x] Bridge Forge HTTP：`@gitbeaker/rest` + `@octokit/rest`（`packages/bridge/src/forgeHttp.ts`）。
-- [ ] （可选后置）orchestrator 拆独立 worker 进程。
 - [x] （取消）云端 Dify Agent / Workflow 回嵌——主路径已移除；若再做应为独立插件，不回旧模块。
 
 ---

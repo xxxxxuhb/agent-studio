@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS `bridges` (
   `dry_run` tinyint NOT NULL DEFAULT 0,
   `model` varchar(128) NOT NULL DEFAULT '',
   `platform` varchar(64) NOT NULL DEFAULT '',
+  `link_type` varchar(16) NOT NULL DEFAULT 'cli',
   `available_drivers` json NOT NULL,
   `status` varchar(16) NOT NULL DEFAULT 'offline',
   `current_run_id` varchar(64) NOT NULL DEFAULT '',
@@ -230,3 +231,20 @@ DEALLOCATE PREPARE `__stmt`;
 
 -- Promote bootstrap admin if present
 UPDATE `users` SET `is_admin` = 1 WHERE `username` = 'admin' LIMIT 1;
+
+-- Upgrade path: older installs may lack bridges.link_type
+SET @__col_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'bridges'
+    AND COLUMN_NAME = 'link_type'
+);
+SET @__sql := IF(
+  @__col_exists = 0,
+  'ALTER TABLE `bridges` ADD COLUMN `link_type` varchar(16) NOT NULL DEFAULT ''cli'' AFTER `platform`',
+  'SELECT ''link_type already present'' AS info'
+);
+PREPARE `__stmt` FROM @__sql;
+EXECUTE `__stmt`;
+DEALLOCATE PREPARE `__stmt`;

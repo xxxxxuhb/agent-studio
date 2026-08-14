@@ -1,5 +1,6 @@
 import {
   applyStudioDecision,
+  applyStudioEvent,
   createHttpBridgeClient,
   resumeStudioRun,
   startStudioRun,
@@ -21,9 +22,15 @@ export function toOrchestratorSteps(
     step_id: s.step_id,
     agent: s.agent,
     label: s.label,
+    kind: s.kind || "agent",
     human_approval: Boolean(s.human_approval),
     on_reject: s.on_reject,
     reject_goto: s.reject_goto,
+    parallel: s.parallel,
+    http: s.http,
+    wait_event: s.wait_event,
+    ci: s.ci,
+    delay: s.delay,
   }));
 }
 
@@ -55,6 +62,15 @@ export function buildRawRequirement(order: WorkOrder): string {
     .join("\n");
 }
 
+function templateContext(order: WorkOrder) {
+  return {
+    work_order_id: order.id,
+    run_id: order.run?.run_id,
+    title: order.title,
+    raw_requirement: buildRawRequirement(order),
+  };
+}
+
 export function studioStateFromOutcome(
   outcome: OrchestratorOutcome,
   bridgeBaseUrl: string,
@@ -81,16 +97,23 @@ export async function runStudioStart(opts: {
   autoApprove: boolean;
   onProgress?: Parameters<typeof startStudioRun>[0]["onProgress"];
 }): Promise<OrchestratorOutcome> {
-  const steps = toOrchestratorSteps(opts.order.run?.steps || []);
+  const run = opts.order.run;
+  const steps = toOrchestratorSteps(run?.steps || []);
+  const ctx = templateContext(opts.order);
   return startStudioRun({
     bridge: makeBridgeClient(opts.bridgeBaseUrl),
     steps,
     agents: agentLookup(opts.humans),
     agents_md_path: opts.agentsMdPath,
-    raw_requirement: buildRawRequirement(opts.order),
+    raw_requirement: ctx.raw_requirement,
     routing_mode: opts.routingMode,
     bridge_base_url: opts.bridgeBaseUrl,
     auto_approve: opts.autoApprove,
+    entry: run?.entry,
+    edges: run?.edges,
+    work_order_id: ctx.work_order_id,
+    run_id: ctx.run_id,
+    title: ctx.title,
     onProgress: opts.onProgress,
   });
 }
@@ -108,6 +131,7 @@ export async function runStudioDecision(opts: {
   }
   const bridgeBaseUrl =
     run.studio.bridge_base_url || "http://127.0.0.1:8787";
+  const ctx = templateContext(opts.order);
   return applyStudioDecision({
     bridge: makeBridgeClient(bridgeBaseUrl),
     steps: toOrchestratorSteps(run.steps || []),
@@ -126,6 +150,12 @@ export async function runStudioDecision(opts: {
     decision: opts.decision,
     feedback: opts.feedback,
     auto_approve: Boolean(run.auto_approve),
+    entry: run.entry,
+    edges: run.edges,
+    work_order_id: ctx.work_order_id,
+    run_id: ctx.run_id,
+    title: ctx.title,
+    raw_requirement: ctx.raw_requirement,
     onProgress: opts.onProgress,
   });
 }
@@ -146,6 +176,7 @@ export async function runStudioResume(opts: {
   const failedIdx = run.steps.findIndex((s) => s.status === "failed");
   const stepIndex =
     failedIdx >= 0 ? failedIdx : (run.current_step_index ?? 0);
+  const ctx = templateContext(opts.order);
   return resumeStudioRun({
     bridge: makeBridgeClient(bridgeBaseUrl),
     steps: toOrchestratorSteps(run.steps || []),
@@ -163,6 +194,57 @@ export async function runStudioResume(opts: {
     current_step_index: stepIndex,
     feedback: opts.feedback,
     auto_approve: Boolean(run.auto_approve),
+    entry: run.entry,
+    edges: run.edges,
+    work_order_id: ctx.work_order_id,
+    run_id: ctx.run_id,
+    title: ctx.title,
+    raw_requirement: ctx.raw_requirement,
+    onProgress: opts.onProgress,
+  });
+}
+
+/** Advance a wait_event step when Forge/manual event arrives. */
+export async function runStudioEvent(opts: {
+  order: WorkOrder;
+  event: "mr_merged" | "issue_labeled" | "manual";
+  labels?: string[];
+  feedback?: string;
+  humans: DigitalHuman[];
+  onProgress?: Parameters<typeof applyStudioEvent>[0]["onProgress"];
+}): Promise<OrchestratorOutcome> {
+  const run = opts.order.run;
+  if (!run?.studio?.bridge_run_id) {
+    throw new Error("missing studio.bridge_run_id");
+  }
+  const bridgeBaseUrl =
+    run.studio.bridge_base_url || "http://127.0.0.1:8787";
+  const ctx = templateContext(opts.order);
+  return applyStudioEvent({
+    bridge: makeBridgeClient(bridgeBaseUrl),
+    steps: toOrchestratorSteps(run.steps || []),
+    agents: agentLookup(opts.humans),
+    state: {
+      bridge_run_id: run.studio.bridge_run_id,
+      bridge_base_url: bridgeBaseUrl,
+      current_stage: run.studio.current_stage,
+      last_summary: run.studio.last_summary,
+      pending_human: false,
+      dry_run: run.studio.dry_run,
+      status: "running",
+      error: null,
+    },
+    current_step_index: run.current_step_index ?? 0,
+    event: opts.event,
+    labels: opts.labels,
+    feedback: opts.feedback,
+    auto_approve: Boolean(run.auto_approve),
+    entry: run.entry,
+    edges: run.edges,
+    work_order_id: ctx.work_order_id,
+    run_id: ctx.run_id,
+    title: ctx.title,
+    raw_requirement: ctx.raw_requirement,
     onProgress: opts.onProgress,
   });
 }

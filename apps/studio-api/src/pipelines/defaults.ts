@@ -7,10 +7,13 @@ function linearSteps(
     id: step.id,
     agent: step.agent,
     label: step.label,
+    kind: "agent" as const,
     human_approval: true,
     on_reject: step.on_reject || "end",
     reject_goto: step.reject_goto,
     inputs_from: index === 0 ? [] : [agents[index - 1].id],
+    // Explicit next so editor/runtime don't rely on array-order fallback.
+    next: agents[index + 1]?.id ?? "__end__",
   }));
 }
 
@@ -89,10 +92,11 @@ export function composePipelineFromPrompt(prompt: string): PipelineCreate {
     }
     if (!wantTest) steps = steps.filter((s) => s.id !== "test");
     if (!wantOps) steps = steps.filter((s) => s.id !== "ops");
-    // rebuild inputs_from linearly
+    // rebuild inputs_from + next linearly
     steps = steps.map((s, i) => ({
       ...s,
       inputs_from: i === 0 ? [] : [steps[i - 1].id],
+      next: steps[i + 1]?.id ?? "__end__",
     }));
     return PipelineCreateSchema.parse({
       ...base,
@@ -114,6 +118,7 @@ export function composePipelineFromPrompt(prompt: string): PipelineCreate {
   steps = steps.map((s, i) => ({
     ...s,
     inputs_from: i === 0 ? [] : [steps[i - 1].id],
+    next: steps[i + 1]?.id ?? "__end__",
   }));
   return PipelineCreateSchema.parse({
     ...base,

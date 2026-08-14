@@ -30,6 +30,8 @@ import {
   type WorkOrderRunEvent,
   type WorkOrderRunStep,
   type WorkOrderUpdate,
+  type PipelineStep,
+  normalizePipelineGraph,
 } from "@agent-studio/agent-schema";
 import { bridgeStageForAgent } from "@agent-studio/orchestrator";
 import { PipelinesService } from "../pipelines/pipelines.service";
@@ -92,6 +94,30 @@ export class WorkOrdersService implements OnModuleInit {
 
   nowIso() {
     return new Date().toISOString();
+  }
+
+  /** Snapshot pipeline step into a pending run step (includes non-agent kinds). */
+  snapshotPipelineStep(s: PipelineStep): WorkOrderRunStep {
+    return {
+      step_id: s.id,
+      agent: s.agent || "",
+      label: s.label || s.id,
+      kind: s.kind || "agent",
+      human_approval: s.human_approval,
+      on_reject: s.on_reject,
+      reject_goto: s.reject_goto,
+      parallel: s.parallel ?? null,
+      http: s.http ?? null,
+      wait_event: s.wait_event ?? null,
+      ci: s.ci ?? null,
+      delay: s.delay ?? null,
+      status: "pending",
+      summary: "",
+      output: "",
+      output_title: "",
+      artifact_paths: [],
+      feedback: "",
+    };
   }
 
   private toWorkOrder(entity: WorkOrderEntity): WorkOrder {
@@ -973,20 +999,15 @@ export class WorkOrdersService implements OnModuleInit {
     }
 
     const stamp = this.nowIso();
-    const steps: WorkOrderRunStep[] = pipeline.steps.map((s) => ({
-      step_id: s.id,
-      agent: s.agent,
-      label: s.label || s.id,
-      human_approval: s.human_approval,
-      on_reject: s.on_reject,
-      reject_goto: s.reject_goto,
-      status: "pending",
-      summary: "",
-      output: "",
-      output_title: "",
-      artifact_paths: [],
-      feedback: "",
-    }));
+    const steps: WorkOrderRunStep[] = pipeline.steps.map((s) =>
+      this.snapshotPipelineStep(s),
+    );
+
+    const graph = normalizePipelineGraph({
+      steps: pipeline.steps,
+      entry: pipeline.entry,
+      edges: pipeline.edges,
+    });
 
     const repoTargets = (routing.repo_targets || []).map((t, i) => ({
       ...t,
@@ -1009,6 +1030,8 @@ export class WorkOrdersService implements OnModuleInit {
         auto_approve: autoApprove,
         current_step_index: 0,
         steps,
+        entry: graph.entry,
+        edges: graph.edges,
         events: [],
         started_at: stamp,
         selected_repo_ids: routing.selected_repo_ids,
@@ -1474,20 +1497,7 @@ export class WorkOrdersService implements OnModuleInit {
     let pipelineSteps = run.steps;
     try {
       pipelineSteps = (await this.pipelines.get(run.pipeline_id)).steps.map(
-        (s) => ({
-          step_id: s.id,
-          agent: s.agent,
-          label: s.label || s.id,
-          human_approval: s.human_approval,
-          on_reject: s.on_reject,
-          reject_goto: s.reject_goto,
-          status: "pending" as const,
-          summary: "",
-          output: "",
-          output_title: "",
-          artifact_paths: [] as string[],
-          feedback: "",
-        }),
+        (s) => this.snapshotPipelineStep(s),
       );
     } catch {
       pipelineSteps = run.steps.map((s) => ({
@@ -1519,6 +1529,76 @@ export class WorkOrdersService implements OnModuleInit {
     return { order, done: false };
   }
 
+  /**
+   * System path for pipeline triggers (cron / Forge webhook) — no JWT user.
+   */
+  async createAndStartFromTrigger(opts: {
+    pipeline_id: string;
+    title: string;
+    requirement: string;
+    project_id?: string;
+    auto_approve?: boolean;
+    trigger_id: string;
+    source: string;
+    tags?: string[];
+  }): Promise<WorkOrder> {
+    const pipeline = await this.pipelines.get(opts.pipeline_id);
+    if (!pipeline.enabled) {
+      throw new BadRequestException(`流水线已停用: ${pipeline.id}`);
+    }
+    const teamId = (pipeline.team_id || "").trim();
+    if (!teamId) {
+      throw new BadRequestException(`流水线 ${pipeline.id} 缺少 team_id`);
+    }
+    const projectId = (opts.project_id || "").trim();
+    if (projectId) {
+      const project = await this.projects.getById(projectId);
+      if ((project.team_id || "").trim() !== teamId) {
+        throw new BadRequestException(
+          `触发器 project_id=${projectId} 与流水线 team 不一致`,
+        );
+      }
+    }
+
+    const id = `trg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const draft = WorkOrderSchema.parse({
+      id,
+      team_id: teamId,
+      title: opts.title.slice(0, 200) || `触发工单 ${pipeline.name}`,
+      requirement:
+        opts.requirement ||
+        `由触发器 ${opts.trigger_id}（${opts.source}）自动创建`,
+      status: "draft",
+      pipeline_id: pipeline.id,
+      project_id: projectId,
+      category: "requirement",
+      priority: "medium",
+      tags: [
+        "trigger",
+        opts.source,
+        opts.trigger_id,
+        ...(opts.tags || []),
+      ].filter(Boolean),
+      clarifications: [],
+      run: null,
+    });
+    const saved = await this.write(draft);
+    this.appendRunEvent(saved, {
+      type: "info",
+      message: `触发器开工单：${opts.source} / ${opts.trigger_id}`,
+      detail: {
+        trigger_id: opts.trigger_id,
+        source: opts.source,
+        pipeline_id: pipeline.id,
+      },
+    });
+    await this.write(saved);
+    return this.start(saved.id, {
+      pipeline_id: pipeline.id,
+      auto_approve: Boolean(opts.auto_approve),
+    });
+  }
+
   async write(order: WorkOrder): Promise<WorkOrder> {
     const stamp = this.nowIso();
     const existing = await this.repo.findOne({ where: { id: order.id } });
@@ -1535,5 +1615,61 @@ export class WorkOrdersService implements OnModuleInit {
     await this.runLogs.touchFromOrder(next);
     this.realtime.publishWorkOrder(next);
     return next;
+  }
+
+  /**
+   * Forge webhook action=advance: find waiting work orders on this pipeline
+   * whose current step is wait_event matching the event, then continue them.
+   */
+  async advanceWaitingFromEvent(opts: {
+    pipeline_id: string;
+    event: "mr_merged" | "issue_labeled" | "manual";
+    labels?: string[];
+    feedback?: string;
+  }): Promise<WorkOrder[]> {
+    const entities = await this.repo.find({
+      where: {
+        pipeline_id: opts.pipeline_id,
+        status: "waiting",
+      },
+    });
+    const advanced: WorkOrder[] = [];
+    for (const entity of entities) {
+      let order: WorkOrder;
+      try {
+        order = this.toWorkOrder(entity);
+      } catch {
+        continue;
+      }
+      const step = order.run?.steps[order.run.current_step_index];
+      if (!step || (step.kind || "agent") !== "wait_event") continue;
+      const expected = step.wait_event?.event || "manual";
+      if (expected !== opts.event && expected !== "manual") continue;
+      if (
+        expected === "issue_labeled" &&
+        (step.wait_event?.labels || []).length
+      ) {
+        const want = new Set(
+          (step.wait_event?.labels || []).map((l) => l.toLowerCase()),
+        );
+        const got = (opts.labels || []).map((l) => l.toLowerCase());
+        if (!got.some((l) => want.has(l))) continue;
+      }
+      try {
+        const saved = await this.studioRunner.advanceFromEvent(order.id, {
+          event: opts.event,
+          labels: opts.labels,
+          feedback: opts.feedback,
+        });
+        advanced.push(saved);
+      } catch (err) {
+        this.logger.error(
+          `advanceWaitingFromEvent ${order.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    return advanced;
   }
 }

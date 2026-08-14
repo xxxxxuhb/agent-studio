@@ -155,6 +155,10 @@ function bannerTitle(
       return currentStep
         ? `等待确认：${currentStep.label || currentStep.step_id}`
         : "等待人工确认";
+    case "waiting":
+      return currentStep
+        ? `等待事件：${currentStep.label || currentStep.step_id}`
+        : "等待外部事件";
     case "completed":
       return "流水线已完成";
     case "failed":
