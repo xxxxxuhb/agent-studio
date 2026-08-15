@@ -71,7 +71,24 @@ export const ProjectRepoCreateSchema = ProjectRepoObjectSchema.omit({
   .superRefine(refineRepoSource);
 export type ProjectRepoCreate = z.infer<typeof ProjectRepoCreateSchema>;
 
-export const ProjectSchema = z.object({
+/** Absolute path on a Bridge host (posix or Windows). */
+export function isAbsoluteRepoLocalPath(localPath: string): boolean {
+  const s = (localPath || "").trim();
+  if (!s) return false;
+  if (s.startsWith("/") || s.startsWith("\\\\")) return true;
+  return /^[a-zA-Z]:[\\/]/.test(s);
+}
+
+/** Local absolute checkouts live on one Bridge machine — executor must be pinned. */
+export function projectNeedsPreferredBridge(project: {
+  repos?: Array<{ local_path?: string | null }>;
+}): boolean {
+  return (project.repos || []).some((r) =>
+    isAbsoluteRepoLocalPath(String(r.local_path || "")),
+  );
+}
+
+const ProjectObjectSchema = z.object({
   id: z
     .string()
     .regex(/^[a-z][a-z0-9_-]*$/, "project id must be snake_case"),
@@ -85,24 +102,62 @@ export const ProjectSchema = z.object({
    * STUDIO_REPOS_DIR default: ~/AgentStudio (macOS/Linux) or C:\.agent-studio (Windows)
    */
   clone_root: z.string().optional().default(""),
+  /**
+   * Preferred Bridge executor when repos use absolute local_path on that host.
+   * Required when any repo.local_path is absolute.
+   */
+  preferred_bridge_id: z.string().optional().default(""),
   repos: z.array(ProjectRepoSchema).default([]),
   enabled: z.boolean().default(true),
   tags: z.array(z.string()).default([]),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
 });
+
+function refinePreferredBridgeForLocalRepos<
+  T extends {
+    preferred_bridge_id?: string;
+    repos?: Array<{ local_path?: string | null }>;
+  },
+>(project: T, ctx: z.RefinementCtx) {
+  if (
+    projectNeedsPreferredBridge(project) &&
+    !(project.preferred_bridge_id || "").trim()
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "使用本地绝对路径仓库时必须指定执行器（preferred_bridge_id）",
+      path: ["preferred_bridge_id"],
+    });
+  }
+}
+
+export const ProjectSchema = ProjectObjectSchema.superRefine(
+  refinePreferredBridgeForLocalRepos,
+);
 export type Project = z.infer<typeof ProjectSchema>;
 
-export const ProjectCreateSchema = ProjectSchema.omit({
+export const ProjectCreateObjectSchema = ProjectObjectSchema.omit({
   created_at: true,
   updated_at: true,
 }).extend({
   repos: z.array(ProjectRepoCreateSchema).default([]),
 });
+
+export const ProjectCreateSchema = ProjectCreateObjectSchema.superRefine(
+  refinePreferredBridgeForLocalRepos,
+);
 export type ProjectCreate = z.infer<typeof ProjectCreateSchema>;
 
-export const ProjectUpdateSchema = ProjectCreateSchema.partial().omit({
-  id: true,
-  team_id: true,
-});
+export const ProjectUpdateSchema = ProjectCreateObjectSchema.partial()
+  .omit({
+    id: true,
+    team_id: true,
+  })
+  .superRefine((project, ctx) => {
+    // Only enforce when repos are present in the patch (full replace).
+    if (project.repos !== undefined) {
+      refinePreferredBridgeForLocalRepos(project, ctx);
+    }
+  });
 export type ProjectUpdate = z.infer<typeof ProjectUpdateSchema>;

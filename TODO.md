@@ -29,7 +29,7 @@
 - [x] 独立包 `packages/orchestrator`；Studio 薄适配（`studio-orchestrator.adapter.ts`）。
 - [x] start / decide / Human Input 暂停；仅 `executor=studio`；Nest `src/dify` 与 Web Dify 面板已删。
 - [x] 流水线步骤存 MySQL；包消费 `agent-schema` 契约。
-- [x] 库内嵌进程形态（API `import @agent-studio/orchestrator`）。
+- [x] 库内嵌进程形态（API `import @agent-studio/orchestrator`）；可选独立 worker（`studio_jobs`）。
 - [x] 流水线可视化编辑（`apps/studio-web/src/pipeline-flow/`）。
 - [x] 包内 `resumeStudioRun` + adapter `runStudioResume` + 单测。
 - [x] **产品续跑**：`POST /work-orders/:id/resume` + Web「从失败阶段续跑」（复用 `bridge_run_id`；失效则回退「重新执行」）。
@@ -76,8 +76,10 @@ Notes (2026-08-13): 编排主路径已通；本地栈只起 MySQL；Forge 用外
 
 ### 移动端独立 App（控制面）
 
-- [ ] 独立 App：登录 / 团队 / 工单 / 审批 / 执行器状态 / 日志产物只读。
-- [ ] 只调 Studio API（+ 可选 Socket）；不跑 Bridge；API 需公网/VPN + HTTPS。
+- [x] `apps/studio-mobile/`（Expo）：登录 / 团队 / 工单 / 审批（通过·驳回）/ 续跑·结束 / 执行器状态 / 日志产物只读。
+- [x] 只调 Studio API（+ Socket 订阅工单）；不跑 Bridge；API `STUDIO_CORS_ORIGINS` + 局域网明文（dev）。
+- [x] 创建工单 + 开始/重新执行流水线（选 pipeline / 执行器；本地仓强制执行器）。
+- [ ] 后置：推送通知、Socket 鉴权、正式 HTTPS / 商店包。
 
 ### 身份 / 驱动
 
@@ -109,16 +111,35 @@ Notes (2026-08-13): 编排主路径已通；本地栈只起 MySQL；Forge 用外
 - [x] **条件分支**：`cond` 边 + `when`（feedback/summary/artifact）；步骤 `branches` 编辑；运行时先匹配 cond 再走 next。
 - [x] **事件 / 定时触发工单**：`Pipeline.triggers`（cron + forge_webhook）；`POST /api/webhooks/pipelines/:id/forge`；进程内 cron tick。
 - [x] **步骤类型扩展**：`kind` = agent / http / wait_event / ci / delay / gateway；物料面板可拖「条件 / 并行 / 延时 / 定时」；webhook `action=advance` 推进 waiting。
-- [ ] （可选）orchestrator 拆独立 worker 进程，长任务不堵 API。
+- [x] （可选）orchestrator 拆独立 worker 进程，长任务不堵 API。
+
+已完成（Studio worker，2026-08-15）：
+- [x] 表 `studio_jobs` + 可序列化 job kinds（prepare_start/start/decide/resume/event）。
+- [x] API 只入队；`STUDIO_ORCHESTRATOR_MODE=inline`（默认）由 API 进程认领执行；`=worker` 时需 `npm run dev:worker`。
+- [x] `worker.main.ts` / `start:worker`；崩溃后 stale reclaim。
 
 ### 通知与协作
 
-现状：Human Input / 完成需打开 Web；Forge 已接 GitLab/GitHub API。
+现状：Human Input / 完成可走 Slack/飞书 Webhook；工单内可评论并 @ 团队成员。Forge 已接 GitLab/GitHub API。
 
-- [ ] Slack / 飞书 / 邮件：Human Input、失败、完成。
-- [ ] 工单评论 / @人。
+- [x] Slack / 飞书：Human Input、失败、完成、评论 @提及（设置 → 通知；团队 secrets）。
+- [ ] 邮件：Human Input、失败、完成。
+- [x] 工单评论 / @人（本团队系统用户；Mentions 补全）。
+- [x] 站内系统通知：团队隔离 inbox；@提及入库 + 顶栏铃铛 / 右上角提示；Socket 实时推送。
 - [ ] MR 评论回写工单。
 - [x] 入站 webhook：MR merged / issue labeled → create+start 或 advance wait_event。
+
+已完成（通知与协作，2026-08-15）：
+- [x] Schema：`notify_on` / Slack·飞书 webhook secrets + public `*_set`；`parseUserMentions`；工单评论 thread schema。
+- [x] `NotificationsService`：pending_approval / failed / completed / comment_mention → Slack + 飞书 Incoming Webhook。
+- [x] 工单评论 API + YAML store；`@用户名`/`@显示名` 解析团队成员；run 事件 `info` 记录。
+- [x] Web：设置「通知」Tab；工单详情 Collapse「协作评论」。
+
+已完成（站内通知，2026-08-15）：
+- [x] Schema `SystemNotification*`；表 `notifications` + `migrate-notifications.sql`。
+- [x] Inbox API：`GET/POST /notifications`（按 `team_id` 隔离）；评论 @ → `createInboxMany`（排除作者）。
+- [x] Realtime：`subscribe_notifications` → `notification` 事件。
+- [x] Web：顶栏铃铛 + Toast 提示；评论 Mentions 选本团队用户；`?wo=` 深链。
 
 已完成（Phase 4 触发器，2026-08-13）：
 - [x] Schema `Pipeline.triggers`（cron / forge_webhook）+ `cronMatches`。
@@ -130,6 +151,22 @@ Notes (2026-08-13): 编排主路径已通；本地栈只起 MySQL；Forge 用外
 - [x] Orchestrator：`executeNonAgentStep` + `applyStudioEvent`；http/ci/wait 单测。
 - [x] Studio：run 快照 kind 配置；waiting outcome；webhook `action=advance`。
 - [x] 编辑器：步骤类型与字段；状态文案「等待事件」。
+
+### 工单附件上传（人 → Agent 输入）
+
+现状：`requirement` / 审批 `feedback` / 评论 / `@数字人` chat 均为纯文本；Agent 只在 Bridge 工作区读文件。控制面存附件若不同步到工作区，Agent 看不见。产物已是 Bridge → Studio 抓取，勿做成反向上传。
+
+约束：一种附件模型（团队隔离 + 体积/类型上限：图、PDF、文本/日志）；Agent 要用的在 start / decide / resume 注入工作区（如 `docs/runs/<id>/inbox/`）并写入 stage prompt。不要做头像、SSH 密钥、流水线 YAML、仓库 zip。
+
+- [x] Schema + 存储：工单附件元数据（`attachment_id`、team、work_order、filename、content_type、bytes）；blob 入库或对象存储。
+- [x] **工单需求附件**：新建/编辑工单可上传；`start` 时推到 Bridge 工作区 + prompt 列出路径。
+- [x] **审批 / 打回 / 续跑复用**：decide / resume 携带附件并再注入工作区。
+- [ ] （后置）评论与 Agent chat 挂同一附件；给人预览；勾选才注入下一轮 Agent。
+
+已完成（工单附件，2026-08-15）：
+- [x] 表 `work_order_attachments` + API list/upload/download/delete；类型/体积上限。
+- [x] Bridge `POST /runs/:id/inbox` → `docs/runs/<id>/inbox/`；stage prompt 列出路径。
+- [x] start / decide / resume 注入；Web 详情「附件」Tab + 编辑页上传。
 
 ### 产物与可观测
 

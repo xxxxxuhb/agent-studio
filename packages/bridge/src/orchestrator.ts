@@ -324,6 +324,14 @@ export async function executeStage(
       : `[bridge] git branch: ${branch.note}`;
   }
 
+  let inboxPaths: string[] = [];
+  try {
+    const { listRunInboxRelPaths } = await import("./artifacts.js");
+    inboxPaths = listRunInboxRelPaths(run.id);
+  } catch {
+    inboxPaths = [];
+  }
+
   const prompt = buildStagePrompt({
     stage,
     config,
@@ -332,6 +340,7 @@ export async function executeStage(
     rawRequirement: run.rawRequirement,
     feedback: run.feedback,
     artifactPaths: artifacts,
+    inboxPaths,
   });
 
   const driver = resolveAgentDriver();

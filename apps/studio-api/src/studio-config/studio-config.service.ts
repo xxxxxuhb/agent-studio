@@ -166,12 +166,19 @@ ${YAML.stringify(secrets, { lineWidth: 100 })}`;
   }
 
   getPublic(teamId?: string): StudioConfigPublic {
-    const cfg = teamId?.trim()
-      ? this.getEffectiveForTeam(teamId)
+    const tid = (teamId || "").trim();
+    const cfg = tid
+      ? this.getEffectiveForTeam(tid)
       : this.getEffectiveForTeam("");
+    const secrets = tid ? this.getTeamSecrets(tid) : TeamSecretsSchema.parse({});
     return StudioConfigPublicSchema.parse({
       ...cfg,
       git_ssh_key_path_set: Boolean(cfg.git_ssh_key_path?.trim()),
+      slack_webhook_url_set: Boolean(secrets.slack_webhook_url?.trim()),
+      feishu_webhook_url_set: Boolean(secrets.feishu_webhook_url?.trim()),
+      notify_on: secrets.notify_on?.length
+        ? secrets.notify_on
+        : ["pending_approval", "failed", "completed"],
     });
   }
 
@@ -193,7 +200,16 @@ ${YAML.stringify(secrets, { lineWidth: 100 })}`;
     return this.config;
   }
 
-  updateForTeam(teamId: string, patch: Partial<StudioConfig>) {
+  updateForTeam(
+    teamId: string,
+    patch: Partial<StudioConfig> & {
+      slack_webhook_url?: string;
+      feishu_webhook_url?: string;
+      clear_slack_webhook_url?: boolean;
+      clear_feishu_webhook_url?: boolean;
+      notify_on?: string[];
+    },
+  ) {
     const tid = (teamId || "").trim();
     if (!tid) throw new BadRequestException("team_id is required");
     const current = this.getForTeam(tid);
@@ -218,6 +234,27 @@ ${YAML.stringify(secrets, { lineWidth: 100 })}`;
     );
 
     const secrets = this.getTeamSecrets(tid);
+    let slack = secrets.slack_webhook_url || "";
+    if (patch.clear_slack_webhook_url) slack = "";
+    else if (
+      patch.slack_webhook_url !== undefined &&
+      String(patch.slack_webhook_url).trim()
+    ) {
+      slack = String(patch.slack_webhook_url).trim();
+    }
+    let feishu = secrets.feishu_webhook_url || "";
+    if (patch.clear_feishu_webhook_url) feishu = "";
+    else if (
+      patch.feishu_webhook_url !== undefined &&
+      String(patch.feishu_webhook_url).trim()
+    ) {
+      feishu = String(patch.feishu_webhook_url).trim();
+    }
+    const notify_on =
+      patch.notify_on !== undefined
+        ? patch.notify_on
+        : secrets.notify_on || ["pending_approval", "failed", "completed"];
+
     const nextSecrets = TeamSecretsSchema.parse({
       ...secrets,
       team_id: tid,
@@ -237,6 +274,9 @@ ${YAML.stringify(secrets, { lineWidth: 100 })}`;
         patch.git_ssh_user === undefined || patch.git_ssh_user === ""
           ? secrets.git_ssh_user || ""
           : patch.git_ssh_user,
+      slack_webhook_url: slack,
+      feishu_webhook_url: feishu,
+      notify_on,
     });
     this.writeTeamSecretsFile(tid, nextSecrets);
     return next;

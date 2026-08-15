@@ -9,6 +9,10 @@ Single entrypoint + Docker MySQL:
 | [`migrate-drop-dify.sql`](./migrate-drop-dify.sql) | Rename digital_humans.dify→bridge; drop pipelines.dify / run_logs.dify_workflow_run_id |
 | [`migrate-run-artifacts.sql`](./migrate-run-artifacts.sql) | Persist Bridge artifact blobs (survive GC) |
 | [`migrate-usage-audit.sql`](./migrate-usage-audit.sql) | Usage events + audit logs |
+| [`migrate-notifications.sql`](./migrate-notifications.sql) | In-app system notifications (team-scoped) |
+| [`migrate-studio-jobs.sql`](./migrate-studio-jobs.sql) | Durable Studio orchestrator job queue |
+| [`migrate-work-order-attachments.sql`](./migrate-work-order-attachments.sql) | Human → Agent inbox attachments |
+| [`migrate-project-preferred-bridge.sql`](./migrate-project-preferred-bridge.sql) | Project preferred_bridge_id for local repos |
 | [`../docker-compose.mysql.yml`](../docker-compose.mysql.yml) | MySQL 8.4 on host port **3316** |
 
 ```bash
@@ -19,7 +23,7 @@ docker compose -f deploy/mysql/docker-compose.yml up -d
 mysql -h 127.0.0.1 -P 3316 -u root -p123456 < apps/studio-api/sql/init.sql
 ```
 
-Tables: `users`, `teams`, `team_members`, `projects`, `work_orders`, `run_logs`, `run_log_entries`, `run_artifacts`, `usage_events`, `audit_logs`, `digital_humans`, `pipelines`, `bridges`.
+Tables: `users`, `teams`, `team_members`, `projects`, `work_orders`, `work_order_attachments`, `studio_jobs`, `run_logs`, `run_log_entries`, `run_artifacts`, `usage_events`, `audit_logs`, `notifications`, `digital_humans`, `pipelines`, `bridges`.
 
 Connection settings: `apps/studio-api/.env` (`STUDIO_MYSQL_*`).  
 Compose: [`deploy/mysql`](../../deploy/mysql/) · Skill [`skills/local-stack-setup/mysql.md`](../../../skills/local-stack-setup/mysql.md).

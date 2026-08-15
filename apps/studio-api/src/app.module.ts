@@ -14,6 +14,7 @@ import { WorkOrdersModule } from "./work-orders/work-orders.module";
 import { TriggersModule } from "./triggers/triggers.module";
 import { UsageModule } from "./usage/usage.module";
 import { AuditModule } from "./audit/audit.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { AuditModule } from "./audit/audit.module";
     BridgesModule,
     WorkOrdersModule,
     StudioConfigModule,
+    NotificationsModule,
     TriggersModule,
     UsageModule,
     AuditModule,

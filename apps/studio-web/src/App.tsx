@@ -43,6 +43,7 @@ import {
   type StoredUser,
 } from "./auth/session";
 import { authApi } from "./api/auth";
+import { NotificationBell } from "./components/NotificationBell";
 
 const { Header, Sider, Content } = Layout;
 
@@ -194,6 +195,9 @@ function Shell() {
               {team?.name}
               {team?.my_role ? ` · ${team.my_role}` : ""}
             </Typography.Text>
+            {team?.id && user?.id ? (
+              <NotificationBell teamId={team.id} userId={user.id} />
+            ) : null}
             <Button
               size="small"
               icon={<SwapOutlined />}

@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS `projects` (
   `name` varchar(128) NOT NULL,
   `description` text NOT NULL,
   `clone_root` varchar(512) NOT NULL DEFAULT '',
+  `preferred_bridge_id` varchar(64) NOT NULL DEFAULT '',
   `repos` json NOT NULL,
   `enabled` tinyint NOT NULL DEFAULT 1,
   `tags` json NOT NULL,
@@ -203,6 +204,57 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
   KEY `IDX_audit_logs_action` (`action`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `notifications` (
+  `id` varchar(36) NOT NULL,
+  `team_id` varchar(36) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
+  `kind` varchar(32) NOT NULL,
+  `title` varchar(256) NOT NULL DEFAULT '',
+  `body` text NOT NULL,
+  `work_order_id` varchar(64) NOT NULL DEFAULT '',
+  `actor_user_id` varchar(36) NOT NULL DEFAULT '',
+  `actor_name` varchar(128) NOT NULL DEFAULT '',
+  `read_at` varchar(40) NULL,
+  `created_at` varchar(40) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `IDX_notifications_team_user` (`team_id`, `user_id`),
+  KEY `IDX_notifications_user_unread` (`user_id`, `read_at`),
+  KEY `IDX_notifications_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `studio_jobs` (
+  `id` varchar(36) NOT NULL,
+  `work_order_id` varchar(64) NOT NULL,
+  `run_id` varchar(64) NOT NULL,
+  `kind` varchar(32) NOT NULL,
+  `payload` json NOT NULL,
+  `status` varchar(16) NOT NULL DEFAULT 'pending',
+  `claimed_by` varchar(64) NOT NULL DEFAULT '',
+  `claimed_at` varchar(40) NULL,
+  `finished_at` varchar(40) NULL,
+  `error` text NULL,
+  `created_at` varchar(40) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `IDX_studio_jobs_status_created` (`status`, `created_at`),
+  KEY `IDX_studio_jobs_work_order` (`work_order_id`),
+  KEY `IDX_studio_jobs_run_id` (`run_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `work_order_attachments` (
+  `id` varchar(36) NOT NULL,
+  `team_id` varchar(36) NOT NULL,
+  `work_order_id` varchar(64) NOT NULL,
+  `filename` varchar(256) NOT NULL,
+  `content_type` varchar(128) NOT NULL DEFAULT 'application/octet-stream',
+  `bytes` int NOT NULL DEFAULT 0,
+  `content` mediumblob NOT NULL,
+  `created_by` varchar(36) NOT NULL DEFAULT '',
+  `created_at` varchar(40) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `IDX_wo_attachments_work_order` (`work_order_id`),
+  KEY `IDX_wo_attachments_team` (`team_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `digital_humans` (
   `id` varchar(64) NOT NULL,
   `team_id` varchar(36) NOT NULL,
@@ -305,6 +357,23 @@ SET @__sql := IF(
   @__col_exists = 0,
   'ALTER TABLE `bridges` ADD COLUMN `link_type` varchar(16) NOT NULL DEFAULT ''cli'' AFTER `platform`',
   'SELECT ''link_type already present'' AS info'
+);
+PREPARE `__stmt` FROM @__sql;
+EXECUTE `__stmt`;
+DEALLOCATE PREPARE `__stmt`;
+
+-- Upgrade path: projects.preferred_bridge_id (required for absolute local repos)
+SET @__col_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'projects'
+    AND COLUMN_NAME = 'preferred_bridge_id'
+);
+SET @__sql := IF(
+  @__col_exists = 0,
+  'ALTER TABLE `projects` ADD COLUMN `preferred_bridge_id` varchar(64) NOT NULL DEFAULT '''' AFTER `clone_root`',
+  'SELECT ''projects.preferred_bridge_id already present'' AS info'
 );
 PREPARE `__stmt` FROM @__sql;
 EXECUTE `__stmt`;

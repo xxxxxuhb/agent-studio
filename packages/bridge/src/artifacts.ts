@@ -143,6 +143,88 @@ export function listRunArtifacts(runId: string): {
   return { run_id: runId, root, items };
 }
 
+const MAX_INBOX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_INBOX_FILES = 20;
+
+function assertSafeInboxName(name: string): string {
+  const raw = String(name || "").trim();
+  if (!raw) throw new Error("inbox name required");
+  if (raw.includes("\0")) throw new Error("invalid inbox name");
+  if (raw !== path.basename(raw) || raw === "." || raw === "..") {
+    throw new Error("inbox name must be a single file name (no path)");
+  }
+  // Allow CJK + common filename chars (Studio sanitizeAttachmentFilename).
+  if (!/^[\w.\u4e00-\u9fff@+-]+$/u.test(raw)) {
+    throw new Error("inbox name has unsupported characters");
+  }
+  return raw;
+}
+
+/**
+ * Write human-provided files under `docs/runs/{runId}/inbox/`.
+ * Agent prompts list these paths when present.
+ */
+export function writeRunInboxFiles(
+  runId: string,
+  files: Array<{ name: string; content_base64: string; content_type?: string }>,
+): { run_id: string; inbox_dir: string; written: string[] } {
+  const run = getRun(runId);
+  const root = artifactRootForRun(run);
+  const inbox = path.join(root, "inbox");
+  fs.mkdirSync(inbox, { recursive: true });
+  if (!files?.length) {
+    return { run_id: runId, inbox_dir: inbox, written: [] };
+  }
+  if (files.length > MAX_INBOX_FILES) {
+    throw new Error(`too many inbox files (max ${MAX_INBOX_FILES})`);
+  }
+  const written: string[] = [];
+  for (const f of files) {
+    const name = assertSafeInboxName(f.name);
+    const buf = Buffer.from(String(f.content_base64 || ""), "base64");
+    if (!buf.length) throw new Error(`empty inbox file: ${name}`);
+    if (buf.length > MAX_INBOX_FILE_BYTES) {
+      throw new Error(
+        `inbox file too large: ${name} (${buf.length} > ${MAX_INBOX_FILE_BYTES})`,
+      );
+    }
+    const full = path.resolve(inbox, name);
+    if (!isUnderRoot(inbox, full) && full !== inbox) {
+      throw new Error("inbox path escapes allowlisted dir");
+    }
+    fs.writeFileSync(full, buf);
+    written.push(name);
+  }
+  return { run_id: runId, inbox_dir: inbox, written };
+}
+
+/** Relative paths under repo for prompt (docs/runs/.../inbox/name). */
+export function listRunInboxRelPaths(runId: string): string[] {
+  const run = getRun(runId);
+  const root = artifactRootForRun(run);
+  const inbox = path.join(root, "inbox");
+  if (!fs.existsSync(inbox)) return [];
+  const out: string[] = [];
+  for (const ent of fs.readdirSync(inbox, { withFileTypes: true })) {
+    if (!ent.isFile()) continue;
+    try {
+      assertSafeInboxName(ent.name);
+    } catch {
+      continue;
+    }
+    const repo = (run.repoPath || "").trim();
+    const full = path.join(inbox, ent.name);
+    if (repo) {
+      const rel = path.relative(repo, full).split(path.sep).join("/");
+      out.push(rel.startsWith("..") ? `inbox/${ent.name}` : rel);
+    } else {
+      out.push(`inbox/${ent.name}`);
+    }
+  }
+  out.sort();
+  return out;
+}
+
 export function readRunArtifact(
   runId: string,
   name: string,

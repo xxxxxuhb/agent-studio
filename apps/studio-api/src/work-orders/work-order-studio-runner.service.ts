@@ -14,6 +14,7 @@ import type {
   OrchestratorProgress,
 } from "@agent-studio/orchestrator";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { RunLogsService } from "../run-logs/run-logs.service";
 import { UsageService } from "../usage/usage.service";
 import { AuditService } from "../audit/audit.service";
@@ -25,6 +26,18 @@ import {
   runStudioStart,
   studioStateFromOutcome,
 } from "./studio-orchestrator.adapter";
+import { StudioJobEntity } from "./entities/studio-job.entity";
+import { StudioJobsService } from "./studio-jobs.service";
+import { WorkOrderAttachmentsService } from "./work-order-attachments.service";
+import type {
+  StudioJobDecidePayload,
+  StudioJobEventPayload,
+  StudioJobKind,
+  StudioJobPayload,
+  StudioJobPrepareStartPayload,
+  StudioJobResumePayload,
+  StudioJobStartPayload,
+} from "./studio-job.types";
 import { WorkOrdersService } from "./work-orders.service";
 
 type AppendEventPartial = {
@@ -44,25 +57,34 @@ type AppendEventPartial = {
 
 /**
  * Studio orchestrator jobs (start / decide / resume) — keeps HTTP handlers thin.
- * Bound to WorkOrdersService for persistence + multi-repo continue.
+ * Jobs are durable in `studio_jobs` and run inline (API) or by `worker.main`.
  */
 @Injectable()
 export class WorkOrderStudioRunner {
   private readonly logger = new Logger(WorkOrderStudioRunner.name);
-  private readonly studioInFlight = new Map<string, Promise<void>>();
+  /** Local in-flight set for sync isBusy while a claimed job executes in this process. */
+  private readonly studioInFlight = new Set<string>();
 
   constructor(
     private readonly humans: DigitalHumansService,
     private readonly runLogs: RunLogsService,
     private readonly usage: UsageService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
+    private readonly studioJobs: StudioJobsService,
+    private readonly attachments: WorkOrderAttachmentsService,
     @Inject(forwardRef(() => WorkOrdersService))
     private readonly orders: WorkOrdersService,
   ) {}
 
-  /** True while a background start/decide/resume job is in flight for this work order. */
+  /** True while this process is executing a job, or a durable job is queued. */
   isBusy(workOrderId: string): boolean {
     return this.studioInFlight.has(workOrderId);
+  }
+
+  async isBusyAsync(workOrderId: string): Promise<boolean> {
+    if (this.studioInFlight.has(workOrderId)) return true;
+    return this.studioJobs.hasActiveJob(workOrderId);
   }
 
   private nowIso() {
@@ -174,135 +196,10 @@ export class WorkOrderStudioRunner {
     const saved = await this.write(draft);
     const runId = saved.run!.run_id;
 
-    this.enqueueJob(saved.id, runId, async (order) => {
-      try {
-        if (order.run?.studio) {
-          order.run.studio.status = "preparing";
-          order.run.studio.last_summary = "正在 Bridge 上准备仓库…";
-          order.run.studio.last_synced_at = this.nowIso();
-        }
-        this.appendRunEvent(order, {
-          type: "info",
-          message: "正在 Bridge 上准备仓库 / 总管选仓…",
-        });
-        await this.write(order);
-
-        const routing = await this.orders.resolveStartRouting(order, {
-          reusePrevious: Boolean(opts.reuse_previous_routing),
-          agentsMdPath: opts.agents_md_path,
-          bridgeBaseUrl: bridgeBase,
-        });
-
-        let latest = await this.get(order.id);
-        if (latest.run?.run_id !== runId) return;
-        if (!latest.run) return;
-
-        const stamp = this.nowIso();
-        const repoTargets = (routing.repo_targets || []).map((t, i) => ({
-          ...t,
-          status: i === 0 ? ("running" as const) : ("pending" as const),
-          started_at: i === 0 ? stamp : undefined,
-        }));
-        latest.run.selected_repo_ids = routing.selected_repo_ids;
-        latest.run.selected_agents_md_path = routing.agents_md_path;
-        latest.run.manager_routing_reason = routing.manager_routing_reason;
-        latest.run.repo_targets = repoTargets;
-        latest.run.current_repo_index = 0;
-        if (latest.run.studio) {
-          latest.run.studio.status = "starting";
-          latest.run.studio.bridge_base_url =
-            latest.run.studio.bridge_base_url || bridgeBase;
-          latest.run.studio.last_summary = "总管选仓完成，启动编排…";
-          latest.run.studio.last_synced_at = stamp;
-          latest.run.studio.error = null;
-        }
-
-        if (latest.project_id || repoTargets.length) {
-          const orderLabel = repoTargets.length
-            ? repoTargets.map((t, i) => `${i + 1}.${t.repo_id}`).join(" → ")
-            : routing.selected_repo_ids.join(",") || "-";
-          this.appendRunEvent(latest, {
-            type: "info",
-            message: `总管改仓计划（按序执行，减少返工）：${orderLabel}`,
-            detail: {
-              project_id: latest.project_id,
-              selected_repo_ids: routing.selected_repo_ids,
-              agents_md_path: routing.agents_md_path,
-              reason: routing.manager_routing_reason,
-              routing_mode: routing.routing_mode,
-              repo_targets: repoTargets,
-            },
-          });
-        }
-
-        const first = latest.run.steps[0];
-        if (first && first.status === "pending") {
-          first.status = "running";
-          first.started_at = stamp;
-        }
-        this.appendRunEvent(latest, {
-          type: "info",
-          message: "Studio 编排已提交（后台执行 Bridge 阶段，页面可刷新查看进度）",
-        });
-        latest = await this.write(latest);
-        if (!latest.run || latest.run.run_id !== runId) return;
-
-        const humans = await this.humans.list({ enabled: "all" });
-        const agentsMdPath =
-          routing.agents_md_path || opts.agents_md_path || "auto";
-        const autoApprove = Boolean(latest.run.auto_approve);
-        const outcome = await runStudioStart({
-          order: latest,
-          bridgeBaseUrl: bridgeBase,
-          agentsMdPath,
-          routingMode: routing.routing_mode,
-          humans,
-          autoApprove,
-          onProgress: async (progress) => {
-            await this.persistProgress(
-              latest.id,
-              runId,
-              progress,
-              bridgeBase,
-            );
-          },
-        });
-        const after = await this.get(order.id);
-        if (after.run?.run_id !== runId) return;
-        await this.applyOutcome(after, outcome, bridgeBase);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const latest = await this.get(order.id);
-        if (!latest.run || latest.run.run_id !== runId) return;
-        const stamp = this.nowIso();
-        latest.status = "failed";
-        latest.run.finished_at = stamp;
-        latest.run.active_step_indices = [];
-        if (latest.run.studio) {
-          latest.run.studio.status = "failed";
-          latest.run.studio.error = msg;
-          latest.run.studio.last_summary = msg;
-          latest.run.studio.pending_human = false;
-          latest.run.studio.last_synced_at = stamp;
-        }
-        const step = latest.run.steps[latest.run.current_step_index];
-        if (step) {
-          step.status = "failed";
-          step.summary = msg;
-          step.finished_at = stamp;
-        }
-        this.appendRunEvent(latest, {
-          type: "sync_error",
-          level: "error",
-          message: `准备失败：${msg}`,
-        });
-        this.appendRunEvent(latest, {
-          type: "run_finished",
-          level: "error",
-          message: `运行结束：failed · ${msg}`,
-        });
-        await this.write(latest);
-      }
+    this.enqueueTypedJob(saved.id, runId, "prepare_start", {
+      agents_md_path: opts.agents_md_path,
+      bridge_base_url: bridgeBase,
+      reuse_previous_routing: Boolean(opts.reuse_previous_routing),
     });
 
     return saved;
@@ -353,27 +250,11 @@ export class WorkOrderStudioRunner {
       message: "Studio 编排已提交（后台执行 Bridge 阶段，页面可刷新查看进度）",
     });
     const saved = await this.write(draft);
-    this.enqueueJob(saved.id, saved.run!.run_id, async (order) => {
-      const humans = await this.humans.list({ enabled: "all" });
-      const outcome = await runStudioStart({
-        order,
-        bridgeBaseUrl: bridgeBase,
-        agentsMdPath,
-        routingMode,
-        humans,
-        autoApprove,
-        onProgress: async (progress) => {
-          await this.persistProgress(
-            order.id,
-            order.run!.run_id,
-            progress,
-            bridgeBase,
-          );
-        },
-      });
-      const latest = await this.get(order.id);
-      if (latest.run?.run_id !== order.run?.run_id) return;
-      await this.applyOutcome(latest, outcome, bridgeBase);
+    this.enqueueTypedJob(saved.id, saved.run!.run_id, "start", {
+      bridge_base_url: bridgeBase,
+      agents_md_path: agentsMdPath,
+      routing_mode: routingMode,
+      auto_approve: autoApprove,
     });
     return saved;
   }
@@ -394,11 +275,12 @@ export class WorkOrderStudioRunner {
     ) {
       throw new BadRequestException("当前没有待确认的人工闸门");
     }
-    const decision =
-      body.decision ||
-      (body.action && /reject|驳回|拒绝/i.test(body.action)
+    const decision: "approve" | "reject" =
+      body.decision === "reject" ||
+      (!body.decision &&
+        Boolean(body.action && /reject|驳回|拒绝/i.test(body.action)))
         ? "reject"
-        : "approve");
+        : "approve";
     this.appendRunEvent(order, {
       type: "human_decision",
       message: `提交确认：${decision}${body.feedback ? ` · 反馈=${body.feedback}` : ""}`,
@@ -446,25 +328,10 @@ export class WorkOrderStudioRunner {
     const bridgeBase =
       saved.run?.studio?.bridge_base_url || "http://127.0.0.1:8787";
     const feedback = body.feedback || "";
-    this.enqueueJob(saved.id, saved.run!.run_id, async (current) => {
-      const humans = await this.humans.list({ enabled: "all" });
-      const outcome = await runStudioDecision({
-        order: current,
-        decision,
-        feedback,
-        humans,
-        onProgress: async (progress) => {
-          await this.persistProgress(
-            current.id,
-            current.run!.run_id,
-            progress,
-            bridgeBase,
-          );
-        },
-      });
-      const latest = await this.get(current.id);
-      if (latest.run?.run_id !== current.run?.run_id) return;
-      await this.applyOutcome(latest, outcome, bridgeBase);
+    this.enqueueTypedJob(saved.id, saved.run!.run_id, "decide", {
+      decision,
+      feedback,
+      bridge_base_url: bridgeBase,
     });
     return saved;
   }
@@ -477,24 +344,9 @@ export class WorkOrderStudioRunner {
     const runId = order.run?.run_id;
     if (!runId) return;
     const { feedback, bridgeBase } = opts;
-    this.enqueueJob(order.id, runId, async (current) => {
-      const humans = await this.humans.list({ enabled: "all" });
-      const outcome = await runStudioResume({
-        order: current,
-        feedback,
-        humans,
-        onProgress: async (progress) => {
-          await this.persistProgress(
-            current.id,
-            current.run!.run_id,
-            progress,
-            bridgeBase,
-          );
-        },
-      });
-      const latest = await this.get(current.id);
-      if (latest.run?.run_id !== current.run?.run_id) return;
-      await this.applyOutcome(latest, outcome, bridgeBase);
+    this.enqueueTypedJob(order.id, runId, "resume", {
+      feedback,
+      bridge_base_url: bridgeBase,
     });
   }
 
@@ -537,26 +389,11 @@ export class WorkOrderStudioRunner {
     const saved = await this.write(order);
     const bridgeBase =
       saved.run?.studio?.bridge_base_url || "http://127.0.0.1:8787";
-    this.enqueueJob(saved.id, saved.run!.run_id, async (current) => {
-      const humans = await this.humans.list({ enabled: "all" });
-      const outcome = await runStudioEvent({
-        order: current,
-        event: opts.event,
-        labels: opts.labels,
-        feedback: opts.feedback,
-        humans,
-        onProgress: async (progress) => {
-          await this.persistProgress(
-            current.id,
-            current.run!.run_id,
-            progress,
-            bridgeBase,
-          );
-        },
-      });
-      const latest = await this.get(current.id);
-      if (latest.run?.run_id !== current.run?.run_id) return;
-      await this.applyOutcome(latest, outcome, bridgeBase);
+    this.enqueueTypedJob(saved.id, saved.run!.run_id, "event", {
+      event: opts.event,
+      labels: opts.labels,
+      feedback: opts.feedback,
+      bridge_base_url: bridgeBase,
     });
     return saved;
   }
@@ -717,71 +554,368 @@ export class WorkOrderStudioRunner {
     await this.write(order);
   }
 
-  /** Run Studio orchestrator off the request path; ignore if a newer run replaced it. */
-  enqueueJob(
+  /** Persist a durable job; worker (or inline API poller) claims and runs it. */
+  enqueueTypedJob(
     workOrderId: string,
     runId: string,
-    job: (order: WorkOrder) => Promise<void>,
+    kind: StudioJobKind,
+    payload: StudioJobPayload,
   ): void {
-    const prev = this.studioInFlight.get(workOrderId);
-    // Assign the promise that is stored in the map (including finally) so cleanup
-    // can compare by identity — `p.finally()` returns a *new* promise.
-    let run!: Promise<void>;
-    run = (async () => {
-      if (prev) {
-        try {
-          await prev;
-        } catch {
-          /* previous job failure already persisted */
-        }
-      }
-      try {
-        const order = await this.get(workOrderId);
-        if (order.run?.run_id !== runId) return;
-        await job(order);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+    void this.studioJobs
+      .enqueue({
+        work_order_id: workOrderId,
+        run_id: runId,
+        kind,
+        payload,
+      })
+      .catch((err) => {
         this.logger.error(
-          `studio orchestrator failed for ${workOrderId}/${runId}: ${msg}`,
+          `enqueue ${kind} failed for ${workOrderId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
         );
-        try {
-          const latest = await this.get(workOrderId);
-          if (latest.run?.run_id !== runId || !latest.run) return;
-          latest.status = "failed";
-          latest.run.finished_at = this.nowIso();
-          if (latest.run.studio) {
-            latest.run.studio.status = "failed";
-            latest.run.studio.error = msg;
-            latest.run.studio.last_synced_at = this.nowIso();
-          }
-          const step = latest.run.steps[latest.run.current_step_index];
-          if (step) {
-            step.status = "failed";
-            step.summary = msg;
-            step.finished_at = this.nowIso();
-          }
-          this.appendRunEvent(latest, {
-            type: "run_finished",
-            level: "error",
-            message: `Studio 编排失败：${msg}`,
-          });
-          await this.write(latest);
-        } catch (persistErr) {
-          this.logger.error(
-            `failed to persist studio error for ${workOrderId}: ${
-              persistErr instanceof Error
-                ? persistErr.message
-                : String(persistErr)
-            }`,
+      });
+  }
+
+  /** Execute a claimed `studio_jobs` row (called by StudioJobWorkerService). */
+  async executeQueuedJob(job: StudioJobEntity): Promise<void> {
+    const workOrderId = job.work_order_id;
+    const runId = job.run_id;
+    this.studioInFlight.add(workOrderId);
+    try {
+      const order = await this.get(workOrderId);
+      if (order.run?.run_id !== runId) return;
+
+      switch (job.kind as StudioJobKind) {
+        case "prepare_start":
+          await this.runPrepareStartJob(
+            order,
+            runId,
+            job.payload as StudioJobPrepareStartPayload,
           );
+          break;
+        case "start":
+          await this.runStartJob(
+            order,
+            job.payload as StudioJobStartPayload,
+          );
+          break;
+        case "decide":
+          await this.runDecideJob(
+            order,
+            job.payload as StudioJobDecidePayload,
+          );
+          break;
+        case "resume":
+          await this.runResumeJob(
+            order,
+            job.payload as StudioJobResumePayload,
+          );
+          break;
+        case "event":
+          await this.runEventJob(
+            order,
+            job.payload as StudioJobEventPayload,
+          );
+          break;
+        default:
+          throw new Error(`unknown studio job kind: ${job.kind}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `studio orchestrator failed for ${workOrderId}/${runId}: ${msg}`,
+      );
+      try {
+        const latest = await this.get(workOrderId);
+        if (latest.run?.run_id !== runId || !latest.run) return;
+        latest.status = "failed";
+        latest.run.finished_at = this.nowIso();
+        if (latest.run.studio) {
+          latest.run.studio.status = "failed";
+          latest.run.studio.error = msg;
+          latest.run.studio.last_synced_at = this.nowIso();
         }
+        const step = latest.run.steps[latest.run.current_step_index];
+        if (step) {
+          step.status = "failed";
+          step.summary = msg;
+          step.finished_at = this.nowIso();
+        }
+        this.appendRunEvent(latest, {
+          type: "run_finished",
+          level: "error",
+          message: `Studio 编排失败：${msg}`,
+        });
+        await this.write(latest);
+        this.notifications.scheduleWorkOrderEvent(latest, "failed", msg);
+      } catch (persistErr) {
+        this.logger.error(
+          `failed to persist studio error for ${workOrderId}: ${
+            persistErr instanceof Error
+              ? persistErr.message
+              : String(persistErr)
+          }`,
+        );
       }
-    })().finally(() => {
-      if (this.studioInFlight.get(workOrderId) === run) {
-        this.studioInFlight.delete(workOrderId);
+      throw err;
+    } finally {
+      this.studioInFlight.delete(workOrderId);
+    }
+  }
+
+  private async loadInboxFiles(workOrderId: string) {
+    try {
+      return await this.attachments.toInboxFiles(workOrderId);
+    } catch (err) {
+      this.logger.warn(
+        `load inbox files for ${workOrderId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return [];
+    }
+  }
+
+  private async runPrepareStartJob(
+    order: WorkOrder,
+    runId: string,
+    opts: StudioJobPrepareStartPayload,
+  ): Promise<void> {
+    const bridgeBase =
+      (opts.bridge_base_url || "").trim() ||
+      order.run?.studio?.bridge_base_url ||
+      "http://127.0.0.1:8787";
+    try {
+      if (order.run?.studio) {
+        order.run.studio.status = "preparing";
+        order.run.studio.last_summary = "正在 Bridge 上准备仓库…";
+        order.run.studio.last_synced_at = this.nowIso();
       }
+      this.appendRunEvent(order, {
+        type: "info",
+        message: "正在 Bridge 上准备仓库 / 总管选仓…",
+      });
+      await this.write(order);
+
+      const routing = await this.orders.resolveStartRouting(order, {
+        reusePrevious: Boolean(opts.reuse_previous_routing),
+        agentsMdPath: opts.agents_md_path,
+        bridgeBaseUrl: bridgeBase,
+      });
+
+      let latest = await this.get(order.id);
+      if (latest.run?.run_id !== runId) return;
+      if (!latest.run) return;
+
+      const stamp = this.nowIso();
+      const repoTargets = (routing.repo_targets || []).map((t, i) => ({
+        ...t,
+        status: i === 0 ? ("running" as const) : ("pending" as const),
+        started_at: i === 0 ? stamp : undefined,
+      }));
+      latest.run.selected_repo_ids = routing.selected_repo_ids;
+      latest.run.selected_agents_md_path = routing.agents_md_path;
+      latest.run.manager_routing_reason = routing.manager_routing_reason;
+      latest.run.repo_targets = repoTargets;
+      latest.run.current_repo_index = 0;
+      if (latest.run.studio) {
+        latest.run.studio.status = "starting";
+        latest.run.studio.bridge_base_url =
+          latest.run.studio.bridge_base_url || bridgeBase;
+        latest.run.studio.last_summary = "总管选仓完成，启动编排…";
+        latest.run.studio.last_synced_at = stamp;
+        latest.run.studio.error = null;
+      }
+
+      if (latest.project_id || repoTargets.length) {
+        const orderLabel = repoTargets.length
+          ? repoTargets.map((t, i) => `${i + 1}.${t.repo_id}`).join(" → ")
+          : routing.selected_repo_ids.join(",") || "-";
+        this.appendRunEvent(latest, {
+          type: "info",
+          message: `总管改仓计划（按序执行，减少返工）：${orderLabel}`,
+          detail: {
+            project_id: latest.project_id,
+            selected_repo_ids: routing.selected_repo_ids,
+            agents_md_path: routing.agents_md_path,
+            reason: routing.manager_routing_reason,
+            routing_mode: routing.routing_mode,
+            repo_targets: repoTargets,
+          },
+        });
+      }
+
+      const first = latest.run.steps[0];
+      if (first && first.status === "pending") {
+        first.status = "running";
+        first.started_at = stamp;
+      }
+      this.appendRunEvent(latest, {
+        type: "info",
+        message: "Studio 编排已提交（后台执行 Bridge 阶段，页面可刷新查看进度）",
+      });
+      latest = await this.write(latest);
+      if (!latest.run || latest.run.run_id !== runId) return;
+
+      const humans = await this.humans.list({ enabled: "all" });
+      const agentsMdPath =
+        routing.agents_md_path || opts.agents_md_path || "auto";
+      const autoApprove = Boolean(latest.run.auto_approve);
+      const outcome = await runStudioStart({
+        order: latest,
+        bridgeBaseUrl: bridgeBase,
+        agentsMdPath,
+        routingMode: routing.routing_mode,
+        humans,
+        autoApprove,
+        inbox_files: await this.loadInboxFiles(latest.id),
+        onProgress: async (progress) => {
+          await this.persistProgress(latest.id, runId, progress, bridgeBase);
+        },
+      });
+      const after = await this.get(order.id);
+      if (after.run?.run_id !== runId) return;
+      await this.applyOutcome(after, outcome, bridgeBase);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const latest = await this.get(order.id);
+      if (!latest.run || latest.run.run_id !== runId) return;
+      const stamp = this.nowIso();
+      latest.status = "failed";
+      latest.run.finished_at = stamp;
+      latest.run.active_step_indices = [];
+      if (latest.run.studio) {
+        latest.run.studio.status = "failed";
+        latest.run.studio.error = msg;
+        latest.run.studio.last_summary = msg;
+        latest.run.studio.pending_human = false;
+        latest.run.studio.last_synced_at = stamp;
+      }
+      const step = latest.run.steps[latest.run.current_step_index];
+      if (step) {
+        step.status = "failed";
+        step.summary = msg;
+        step.finished_at = stamp;
+      }
+      this.appendRunEvent(latest, {
+        type: "sync_error",
+        level: "error",
+        message: `准备失败：${msg}`,
+      });
+      this.appendRunEvent(latest, {
+        type: "run_finished",
+        level: "error",
+        message: `运行结束：failed · ${msg}`,
+      });
+      await this.write(latest);
+      this.notifications.scheduleWorkOrderEvent(latest, "failed", msg);
+    }
+  }
+
+  private async runStartJob(
+    order: WorkOrder,
+    payload: StudioJobStartPayload,
+  ): Promise<void> {
+    const bridgeBase = payload.bridge_base_url;
+    const humans = await this.humans.list({ enabled: "all" });
+    const outcome = await runStudioStart({
+      order,
+      bridgeBaseUrl: bridgeBase,
+      agentsMdPath: payload.agents_md_path,
+      routingMode: payload.routing_mode,
+      humans,
+      autoApprove: payload.auto_approve,
+      inbox_files: await this.loadInboxFiles(order.id),
+      onProgress: async (progress) => {
+        await this.persistProgress(
+          order.id,
+          order.run!.run_id,
+          progress,
+          bridgeBase,
+        );
+      },
     });
-    this.studioInFlight.set(workOrderId, run);
+    const latest = await this.get(order.id);
+    if (latest.run?.run_id !== order.run?.run_id) return;
+    await this.applyOutcome(latest, outcome, bridgeBase);
+  }
+
+  private async runDecideJob(
+    order: WorkOrder,
+    payload: StudioJobDecidePayload,
+  ): Promise<void> {
+    const bridgeBase = payload.bridge_base_url;
+    const humans = await this.humans.list({ enabled: "all" });
+    const outcome = await runStudioDecision({
+      order,
+      decision: payload.decision,
+      feedback: payload.feedback,
+      humans,
+      inbox_files: await this.loadInboxFiles(order.id),
+      onProgress: async (progress) => {
+        await this.persistProgress(
+          order.id,
+          order.run!.run_id,
+          progress,
+          bridgeBase,
+        );
+      },
+    });
+    const latest = await this.get(order.id);
+    if (latest.run?.run_id !== order.run?.run_id) return;
+    await this.applyOutcome(latest, outcome, bridgeBase);
+  }
+
+  private async runResumeJob(
+    order: WorkOrder,
+    payload: StudioJobResumePayload,
+  ): Promise<void> {
+    const bridgeBase = payload.bridge_base_url;
+    const humans = await this.humans.list({ enabled: "all" });
+    const outcome = await runStudioResume({
+      order,
+      feedback: payload.feedback,
+      humans,
+      inbox_files: await this.loadInboxFiles(order.id),
+      onProgress: async (progress) => {
+        await this.persistProgress(
+          order.id,
+          order.run!.run_id,
+          progress,
+          bridgeBase,
+        );
+      },
+    });
+    const latest = await this.get(order.id);
+    if (latest.run?.run_id !== order.run?.run_id) return;
+    await this.applyOutcome(latest, outcome, bridgeBase);
+  }
+
+  private async runEventJob(
+    order: WorkOrder,
+    payload: StudioJobEventPayload,
+  ): Promise<void> {
+    const bridgeBase = payload.bridge_base_url;
+    const humans = await this.humans.list({ enabled: "all" });
+    const outcome = await runStudioEvent({
+      order,
+      event: payload.event,
+      labels: payload.labels,
+      feedback: payload.feedback,
+      humans,
+      onProgress: async (progress) => {
+        await this.persistProgress(
+          order.id,
+          order.run!.run_id,
+          progress,
+          bridgeBase,
+        );
+      },
+    });
+    const latest = await this.get(order.id);
+    if (latest.run?.run_id !== order.run?.run_id) return;
+    await this.applyOutcome(latest, outcome, bridgeBase);
   }
 
   async applyOutcome(
@@ -863,6 +997,13 @@ export class WorkOrderStudioRunner {
         step_id: step?.step_id,
         agent: step?.agent,
       });
+      const saved = await this.write(order);
+      this.notifications.scheduleWorkOrderEvent(
+        saved,
+        "pending_approval",
+        step?.label || step?.step_id || outcome.stage,
+      );
+      return saved;
     } else if (outcome.kind === "waiting_event") {
       order.status = "waiting";
       order.run.current_step_index = idx;
@@ -925,6 +1066,13 @@ export class WorkOrderStudioRunner {
         level: "warn",
         message: `运行结束：rejected${summary ? ` · ${summary}` : ""}`,
       });
+      const saved = await this.write(order);
+      this.notifications.scheduleWorkOrderEvent(
+        saved,
+        "failed",
+        summary || "rejected",
+      );
+      return saved;
     } else if (outcome.kind === "failed") {
       order.status = "failed";
       order.run.finished_at = stamp;
@@ -939,6 +1087,13 @@ export class WorkOrderStudioRunner {
         level: "error",
         message: `运行结束：failed · ${outcome.error}`,
       });
+      const saved = await this.write(order);
+      this.notifications.scheduleWorkOrderEvent(
+        saved,
+        "failed",
+        outcome.error,
+      );
+      return saved;
     }
 
     return this.write(order);

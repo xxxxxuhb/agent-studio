@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -10,10 +11,15 @@ import {
   Space,
   Switch,
   Tabs,
+  Tag,
   Typography,
   message,
 } from "antd";
-import type { StudioConfigPublic, StudioLanguage } from "@agent-studio/agent-schema";
+import type {
+  NotifyEvent,
+  StudioConfigPublic,
+  StudioLanguage,
+} from "@agent-studio/agent-schema";
 import { authApi } from "../api/auth";
 import { settingsApi, type StudioSettingsUpdate } from "../api/settings";
 import {
@@ -31,6 +37,13 @@ type ProfileForm = {
   new_password?: string;
   confirm_password?: string;
 };
+
+const NOTIFY_OPTIONS: { value: NotifyEvent; label: string }[] = [
+  { value: "pending_approval", label: "等待人工确认" },
+  { value: "failed", label: "失败 / 拒绝" },
+  { value: "completed", label: "完成" },
+  { value: "comment_mention", label: "评论 @提及" },
+];
 
 export function SettingsPage() {
   const [form] = Form.useForm<StudioSettingsUpdate>();
@@ -71,6 +84,13 @@ export function SettingsPage() {
         git_prefer_ssh: studio.git_prefer_ssh,
         git_ssh_port: studio.git_ssh_port,
         git_ssh_user: studio.git_ssh_user || "",
+        slack_webhook_url: "",
+        feishu_webhook_url: "",
+        clear_slack_webhook_url: false,
+        clear_feishu_webhook_url: false,
+        notify_on: studio.notify_on?.length
+          ? studio.notify_on
+          : ["pending_approval", "failed", "completed"],
       });
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
@@ -132,6 +152,45 @@ export function SettingsPage() {
     }
   }
 
+  async function saveNotifications() {
+    try {
+      const values = await form.validateFields([
+        "slack_webhook_url",
+        "feishu_webhook_url",
+        "clear_slack_webhook_url",
+        "clear_feishu_webhook_url",
+        "notify_on",
+      ]);
+      setLoading(true);
+      const payload: StudioSettingsUpdate = {
+        notify_on: (values.notify_on || []) as NotifyEvent[],
+        clear_slack_webhook_url: Boolean(values.clear_slack_webhook_url),
+        clear_feishu_webhook_url: Boolean(values.clear_feishu_webhook_url),
+      };
+      const slack = String(values.slack_webhook_url || "").trim();
+      const feishu = String(values.feishu_webhook_url || "").trim();
+      if (slack) payload.slack_webhook_url = slack;
+      if (feishu) payload.feishu_webhook_url = feishu;
+      const next = await settingsApi.update(payload, {
+        team_id: requireTeamId(),
+      });
+      setConfig(next);
+      form.setFieldsValue({
+        slack_webhook_url: "",
+        feishu_webhook_url: "",
+        clear_slack_webhook_url: false,
+        clear_feishu_webhook_url: false,
+        notify_on: next.notify_on,
+      });
+      message.success("通知配置已保存");
+    } catch (err) {
+      if (err && typeof err === "object" && "errorFields" in err) return;
+      message.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveProfile() {
     try {
       const values = await profileForm.validateFields();
@@ -171,6 +230,7 @@ export function SettingsPage() {
 
   function onSave() {
     if (activeTab === "profile") void saveProfile();
+    else if (activeTab === "notifications") void saveNotifications();
     else void saveTeam();
   }
 
@@ -186,14 +246,30 @@ export function SettingsPage() {
           <span className="page-meta">
             {activeTab === "profile"
               ? "个人账号 · 显示名与密码"
-              : "当前团队配置 · 空字段回退安装级默认"}
+              : activeTab === "notifications"
+                ? "团队通知 · Slack / 飞书 Webhook"
+                : "当前团队配置 · 空字段回退安装级默认"}
           </span>
-          {activeTab !== "profile" && config ? (
+          {activeTab !== "profile" && activeTab !== "notifications" && config ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
               Bridge {config.bridge_base_url || "未设置"} ·{" "}
               {config.language === "zh" ? "中文" : "EN"} · AGENTS.md{" "}
               {config.agents_md_path || "auto"}
             </Typography.Text>
+          ) : null}
+          {activeTab === "notifications" && config ? (
+            <Space size={4} wrap>
+              {config.slack_webhook_url_set ? (
+                <Tag color="green">Slack 已配置</Tag>
+              ) : (
+                <Tag>Slack 未配置</Tag>
+              )}
+              {config.feishu_webhook_url_set ? (
+                <Tag color="green">飞书 已配置</Tag>
+              ) : (
+                <Tag>飞书 未配置</Tag>
+              )}
+            </Space>
           ) : null}
           {activeTab === "profile" && user ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -368,6 +444,89 @@ export function SettingsPage() {
                         <Input placeholder="git" />
                       </Form.Item>
                     </Space>
+                  </Form>
+                ),
+              },
+              {
+                key: "notifications",
+                label: "通知",
+                children: (
+                  <Form form={form} layout="vertical" disabled={loading} style={{ maxWidth: 640 }}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                      message="Slack Incoming Webhook / 飞书机器人 Webhook"
+                      description="留空保存不会改动已有密钥；勾选「清除」可删除。"
+                    />
+                    <Form.Item
+                      name="slack_webhook_url"
+                      label={
+                        <Space size={8}>
+                          <span>Slack Webhook</span>
+                          {config?.slack_webhook_url_set ? (
+                            <Tag color="green">已配置</Tag>
+                          ) : null}
+                        </Space>
+                      }
+                      extra="https://hooks.slack.com/services/..."
+                    >
+                      <Input.Password
+                        placeholder={
+                          config?.slack_webhook_url_set
+                            ? "已配置；留空保持不变"
+                            : "粘贴 Incoming Webhook URL"
+                        }
+                        autoComplete="off"
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      name="clear_slack_webhook_url"
+                      valuePropName="checked"
+                      style={{ marginTop: -8 }}
+                    >
+                      <Checkbox>清除 Slack Webhook</Checkbox>
+                    </Form.Item>
+                    <Form.Item
+                      name="feishu_webhook_url"
+                      label={
+                        <Space size={8}>
+                          <span>飞书 Webhook</span>
+                          {config?.feishu_webhook_url_set ? (
+                            <Tag color="green">已配置</Tag>
+                          ) : null}
+                        </Space>
+                      }
+                      extra="飞书 / Lark 自定义机器人地址"
+                    >
+                      <Input.Password
+                        placeholder={
+                          config?.feishu_webhook_url_set
+                            ? "已配置；留空保持不变"
+                            : "粘贴飞书机器人 Webhook URL"
+                        }
+                        autoComplete="off"
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      name="clear_feishu_webhook_url"
+                      valuePropName="checked"
+                      style={{ marginTop: -8 }}
+                    >
+                      <Checkbox>清除飞书 Webhook</Checkbox>
+                    </Form.Item>
+                    <Form.Item
+                      name="notify_on"
+                      label="推送事件"
+                      extra="未勾选的事件不会发出 Webhook"
+                    >
+                      <Checkbox.Group
+                        options={NOTIFY_OPTIONS.map((o) => ({
+                          label: o.label,
+                          value: o.value,
+                        }))}
+                      />
+                    </Form.Item>
                   </Form>
                 ),
               },

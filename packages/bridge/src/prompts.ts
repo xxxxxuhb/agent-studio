@@ -8,6 +8,8 @@ export function buildStagePrompt(opts: {
   rawRequirement: string;
   feedback?: string;
   artifactPaths: Record<string, string>;
+  /** Relative workspace paths under docs/runs/.../inbox/ */
+  inboxPaths?: string[];
 }): string {
   const {
     stage,
@@ -17,7 +19,18 @@ export function buildStagePrompt(opts: {
     rawRequirement,
     feedback = "",
     artifactPaths,
+    inboxPaths = [],
   } = opts;
+
+  const artifactLines = Object.entries(artifactPaths)
+    .filter(([k]) => k !== "runs_dir" && k !== "__inbox_list")
+    .map(([k, v]) => `- ${k}: ${v}`)
+    .join("\n");
+
+  const inboxBlock =
+    inboxPaths.length > 0
+      ? inboxPaths.map((p) => `- ${p}`).join("\n")
+      : "(none — no files under docs/runs/<run_id>/inbox/)";
 
   const common = `
 You are the "${stage}" agent in a multi-agent delivery pipeline.
@@ -35,9 +48,7 @@ ${agentsBody.trim()}
 ---
 
 Artifact paths (write/update these files as required):
-${Object.entries(artifactPaths)
-  .map(([k, v]) => `- ${k}: ${v}`)
-  .join("\n")}
+${artifactLines}
 
 Commands from config:
 - install: ${config.commands.install || "(empty)"}
@@ -53,6 +64,9 @@ ${rawRequirement}
 
 Human feedback / @-mention chat supplement (may be empty):
 ${feedback || "(none)"}
+
+Human-provided inbox files (read from workspace when listed; may be empty):
+${inboxBlock}
 
 When feedback is from Studio Agent chat (@ digital human), treat it as an ad-hoc user request for YOUR role: apply the supplement in-repo, update your artifacts/summary, and do not rewrite the pipeline graph.
 `.trim();

@@ -112,16 +112,21 @@ export async function runStudioStart(opts: {
   humans: DigitalHuman[];
   autoApprove: boolean;
   onProgress?: Parameters<typeof startStudioRun>[0]["onProgress"];
+  inbox_files?: Parameters<typeof startStudioRun>[0]["inbox_files"];
 }): Promise<OrchestratorOutcome> {
   const run = opts.order.run;
   const steps = toOrchestratorSteps(run?.steps || []);
   const ctx = templateContext(opts.order);
+  const inboxNote =
+    opts.inbox_files?.length
+      ? `\n\n【附件】已注入工作区 docs/runs/<bridge_run_id>/inbox/（共 ${opts.inbox_files.length} 个）：\n${opts.inbox_files.map((f) => `- ${f.name}`).join("\n")}`
+      : "";
   return startStudioRun({
     bridge: makeBridgeClient(opts.bridgeBaseUrl),
     steps,
     agents: agentLookup(opts.humans),
     agents_md_path: opts.agentsMdPath,
-    raw_requirement: ctx.raw_requirement,
+    raw_requirement: ctx.raw_requirement + inboxNote,
     routing_mode: opts.routingMode,
     bridge_base_url: opts.bridgeBaseUrl,
     auto_approve: opts.autoApprove,
@@ -131,6 +136,7 @@ export async function runStudioStart(opts: {
     run_id: ctx.run_id,
     title: ctx.title,
     onProgress: opts.onProgress,
+    inbox_files: opts.inbox_files,
   });
 }
 
@@ -140,6 +146,7 @@ export async function runStudioDecision(opts: {
   feedback?: string;
   humans: DigitalHuman[];
   onProgress?: Parameters<typeof applyStudioDecision>[0]["onProgress"];
+  inbox_files?: Parameters<typeof applyStudioDecision>[0]["inbox_files"];
 }): Promise<OrchestratorOutcome> {
   const run = opts.order.run;
   if (!run?.studio?.bridge_run_id) {
@@ -173,6 +180,7 @@ export async function runStudioDecision(opts: {
     title: ctx.title,
     raw_requirement: ctx.raw_requirement,
     onProgress: opts.onProgress,
+    inbox_files: opts.inbox_files,
   });
 }
 
@@ -182,6 +190,7 @@ export async function runStudioResume(opts: {
   feedback?: string;
   humans: DigitalHuman[];
   onProgress?: Parameters<typeof resumeStudioRun>[0]["onProgress"];
+  inbox_files?: Parameters<typeof resumeStudioRun>[0]["inbox_files"];
 }): Promise<OrchestratorOutcome> {
   const run = opts.order.run;
   if (!run?.studio?.bridge_run_id) {
@@ -217,6 +226,7 @@ export async function runStudioResume(opts: {
     title: ctx.title,
     raw_requirement: ctx.raw_requirement,
     onProgress: opts.onProgress,
+    inbox_files: opts.inbox_files,
   });
 }
 

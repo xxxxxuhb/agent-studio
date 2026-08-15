@@ -37,6 +37,7 @@ import {
 } from "./LiveEventMessage";
 import { MarkdownBody } from "./MarkdownBody";
 import { WorkOrderAgentChat } from "./WorkOrderAgentChat";
+import { WorkOrderComments } from "./WorkOrderComments";
 import { PipelineFlowModal } from "../pipeline-flow/PipelineFlowModal";
 import { toFlowStepsFromRun } from "../pipeline-flow/buildPipelineFlow";
 import {
@@ -645,6 +646,19 @@ function WorkOrderRunPanelBody({
           onDecide={onDecide}
         />
       ) : null}
+
+      <Collapse
+        style={{ marginTop: 12 }}
+        items={[
+          {
+            key: "comments",
+            label: "协作评论",
+            children: (
+              <WorkOrderComments order={order} onOrderUpdate={onOrderUpdate} />
+            ),
+          },
+        ]}
+      />
 
       <Drawer
         title="Agent 聊天"

@@ -45,6 +45,11 @@ export class PipelineTriggersService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    const role = (process.env.STUDIO_PROCESS_ROLE || "api").trim().toLowerCase();
+    if (role === "worker") {
+      this.logger.log("pipeline cron triggers skipped on studio-worker");
+      return;
+    }
     const enabled = (process.env.STUDIO_TRIGGERS_CRON || "true").trim() !== "false";
     if (!enabled) {
       this.logger.log("pipeline cron triggers disabled (STUDIO_TRIGGERS_CRON=false)");

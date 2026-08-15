@@ -23,8 +23,21 @@ export type StudioConfig = z.infer<typeof StudioConfigSchema>;
 
 export const StudioConfigPublicSchema = StudioConfigSchema.extend({
   git_ssh_key_path_set: z.boolean().default(false),
+  slack_webhook_url_set: z.boolean().default(false),
+  feishu_webhook_url_set: z.boolean().default(false),
+  notify_on: z
+    .array(z.enum(["pending_approval", "failed", "completed", "comment_mention"]))
+    .default(["pending_approval", "failed", "completed"]),
 });
 export type StudioConfigPublic = z.infer<typeof StudioConfigPublicSchema>;
+
+export const NotifyEventSchema = z.enum([
+  "pending_approval",
+  "failed",
+  "completed",
+  "comment_mention",
+]);
+export type NotifyEvent = z.infer<typeof NotifyEventSchema>;
 
 /**
  * Per-team overlay (file: data/team-secrets/{teamId}.yaml, mode 0600).
@@ -41,6 +54,15 @@ export const TeamSecretsSchema = z
     git_ssh_user: z.string().optional().default(""),
     /** Shared secret for POST /webhooks/pipelines/:id/forge (GitLab token / Studio token). */
     forge_webhook_secret: z.string().optional().default(""),
+    /** Slack Incoming Webhook URL (https://hooks.slack.com/...). */
+    slack_webhook_url: z.string().optional().default(""),
+    /** Feishu/Lark bot webhook URL. */
+    feishu_webhook_url: z.string().optional().default(""),
+    /** Which work-order events trigger outbound notify. */
+    notify_on: z
+      .array(NotifyEventSchema)
+      .optional()
+      .default(["pending_approval", "failed", "completed"]),
   })
   .passthrough();
 export type TeamSecrets = z.infer<typeof TeamSecretsSchema>;
@@ -48,5 +70,11 @@ export type TeamSecrets = z.infer<typeof TeamSecretsSchema>;
 export const TeamSecretsPublicSchema = TeamSecretsSchema.extend({
   git_ssh_key_path_set: z.boolean().default(false),
   forge_webhook_secret_set: z.boolean().default(false),
-}).omit({ forge_webhook_secret: true });
+  slack_webhook_url_set: z.boolean().default(false),
+  feishu_webhook_url_set: z.boolean().default(false),
+}).omit({
+  forge_webhook_secret: true,
+  slack_webhook_url: true,
+  feishu_webhook_url: true,
+});
 export type TeamSecretsPublic = z.infer<typeof TeamSecretsPublicSchema>;

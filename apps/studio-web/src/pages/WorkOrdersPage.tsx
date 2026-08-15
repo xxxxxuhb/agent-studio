@@ -33,12 +33,14 @@ import type {
   WorkOrder,
   WorkOrderCreate,
 } from "@agent-studio/agent-schema";
+import { projectNeedsPreferredBridge } from "@agent-studio/agent-schema";
 import { bridgesApi } from "../api/bridges";
 import { pipelinesApi } from "../api/pipelines";
 import { projectsApi } from "../api/projects";
 import { workOrdersApi } from "../api/work-orders";
 import { getSelectedTeam } from "../auth/session";
 import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
+import { WorkOrderAttachments } from "../components/WorkOrderAttachments";
 import { WorkOrderRunPanel } from "../components/WorkOrderRunPanel";
 import { STATUS_LABEL, CATEGORY_LABEL, CATEGORY_OPTIONS } from "../work-orders/workOrderLabels";
 import { subscribeWorkOrder } from "../ws/work-orders";
@@ -49,7 +51,7 @@ function genId() {
 
 export function WorkOrdersPage() {
   const [searchParams] = useSearchParams();
-  const deepLinkId = (searchParams.get("id") || "").trim();
+  const deepLinkId = (searchParams.get("wo") || searchParams.get("id") || "").trim();
   const [items, setItems] = useState<WorkOrder[]>([]);
   const [pipelines, setPipelines] = useState<PipelinePublic[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -74,6 +76,16 @@ export function WorkOrdersPage() {
     "connecting" | "connected" | "disconnected" | "idle"
   >("idle");
   const [form] = Form.useForm<WorkOrderCreate>();
+  const watchedProjectId = Form.useWatch("project_id", form);
+
+  const selectedProject = useMemo(() => {
+    const id = (watchedProjectId || "").trim();
+    return projects.find((p) => p.id === id) || null;
+  }, [projects, watchedProjectId]);
+
+  const projectNeedsBridge = Boolean(
+    selectedProject && projectNeedsPreferredBridge(selectedProject),
+  );
 
   const selected = useMemo(
     () => items.find((w) => w.id === selectedId) || null,
@@ -231,13 +243,26 @@ export function WorkOrdersPage() {
 
   async function startPipeline() {
     if (!selected || !pipelineId || startBusy) return;
+    const project = projects.find((p) => p.id === selected.project_id);
+    if (
+      project &&
+      projectNeedsPreferredBridge(project) &&
+      !(startBridgeId || selected.preferred_bridge_id || project.preferred_bridge_id || "").trim()
+    ) {
+      message.error("项目使用了本地仓库，启动前必须选择执行器");
+      return;
+    }
     setStartBusy(true);
     try {
       const updated = await workOrdersApi.start(selected.id, {
         pipeline_id: pipelineId,
         executor: "studio",
         auto_approve: autoApprove,
-        preferred_bridge_id: startBridgeId || "",
+        preferred_bridge_id:
+          startBridgeId ||
+          selected.preferred_bridge_id ||
+          project?.preferred_bridge_id ||
+          "",
       });
       setStartOpen(false);
       const queued = updated.status === "queued";
@@ -274,7 +299,12 @@ export function WorkOrdersPage() {
   async function restartRun() {
     if (!selected?.run) return;
     setAutoApprove(Boolean(selected.run.auto_approve));
-    setRestartBridgeId(selected.preferred_bridge_id || undefined);
+    const project = projects.find((p) => p.id === selected.project_id);
+    setRestartBridgeId(
+      selected.preferred_bridge_id ||
+        project?.preferred_bridge_id ||
+        undefined,
+    );
     setRestartOpen(true);
   }
 
@@ -297,11 +327,29 @@ export function WorkOrdersPage() {
 
   async function confirmRestart() {
     if (!selected?.run || restartBusy) return;
+    const project = projects.find((p) => p.id === selected.project_id);
+    if (
+      project &&
+      projectNeedsPreferredBridge(project) &&
+      !(
+        restartBridgeId ||
+        selected.preferred_bridge_id ||
+        project.preferred_bridge_id ||
+        ""
+      ).trim()
+    ) {
+      message.error("项目使用了本地仓库，重新执行前必须选择执行器");
+      return;
+    }
     setRestartBusy(true);
     try {
       const updated = await workOrdersApi.restart(selected.id, {
         auto_approve: autoApprove,
-        preferred_bridge_id: restartBridgeId || "",
+        preferred_bridge_id:
+          restartBridgeId ||
+          selected.preferred_bridge_id ||
+          project?.preferred_bridge_id ||
+          "",
       });
       setRestartOpen(false);
       const queued = updated.status === "queued";
@@ -461,8 +509,13 @@ export function WorkOrdersPage() {
                       onClick={() => {
                         setPipelineId(selected.pipeline_id || pipelines[0]?.id);
                         setAutoApprove(Boolean(selected.run?.auto_approve));
+                        const project = projects.find(
+                          (p) => p.id === selected.project_id,
+                        );
                         setStartBridgeId(
-                          selected.preferred_bridge_id || undefined,
+                          selected.preferred_bridge_id ||
+                            project?.preferred_bridge_id ||
+                            undefined,
                         );
                         setStartOpen(true);
                       }}
@@ -621,6 +674,13 @@ export function WorkOrdersPage() {
                         </Typography.Paragraph>
                       ),
                     },
+                    {
+                      key: "attachments",
+                      label: "附件",
+                      children: (
+                        <WorkOrderAttachments workOrderId={selected.id} />
+                      ),
+                    },
                   ]}
                 />
 
@@ -679,6 +739,15 @@ export function WorkOrdersPage() {
           <Form.Item name="requirement" label="需求描述" rules={[{ required: true }]}>
             <Input.TextArea rows={6} placeholder="把原始需求写在这里…" />
           </Form.Item>
+          {editingId ? (
+            <Form.Item label="附件（人 → Agent）">
+              <WorkOrderAttachments workOrderId={editingId} />
+            </Form.Item>
+          ) : (
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+              保存工单后可在「编辑」或详情「附件」Tab 上传文件（启动时注入 Agent 工作区）。
+            </Typography.Paragraph>
+          )}
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item
@@ -718,11 +787,24 @@ export function WorkOrdersPage() {
           <Form.Item
             name="preferred_bridge_id"
             label="执行器"
-            tooltip="指定后由该 Bridge 执行；忙则排队等待其空闲。留空则自动选择空闲执行器"
+            required={projectNeedsBridge}
+            rules={
+              projectNeedsBridge
+                ? [{ required: true, message: "本地仓库项目必须选择执行器" }]
+                : []
+            }
+            tooltip="指定后由该 Bridge 执行；忙则排队等待其空闲。本地仓库项目必选。"
+            extra={
+              projectNeedsBridge
+                ? "绑定项目使用了本地路径，必须指定执行器"
+                : undefined
+            }
           >
             <Select
-              allowClear
-              placeholder="自动选择空闲执行器"
+              allowClear={!projectNeedsBridge}
+              placeholder={
+                projectNeedsBridge ? "请选择执行器" : "自动选择空闲执行器"
+              }
               options={bridgeOptions}
             />
           </Form.Item>
@@ -738,6 +820,15 @@ export function WorkOrdersPage() {
                 value: p.id,
                 label: `${p.name} (${p.id}) · ${p.repos.length} 仓`,
               }))}
+              onChange={(projectId) => {
+                const p = projects.find((x) => x.id === projectId);
+                if (p?.preferred_bridge_id) {
+                  form.setFieldValue(
+                    "preferred_bridge_id",
+                    p.preferred_bridge_id,
+                  );
+                }
+              }}
             />
           </Form.Item>
           <Form.Item name="tags" label="标签" tooltip="可输入多个后回车，或后续用逗号">
@@ -780,10 +871,33 @@ export function WorkOrdersPage() {
           </Form.Item>
           <Form.Item
             label="执行器"
-            extra="指定后固定用该执行器；忙则排队。留空自动分配空闲执行器"
+            required={Boolean(
+              selected?.project_id &&
+                projects.find((p) => p.id === selected.project_id) &&
+                projectNeedsPreferredBridge(
+                  projects.find((p) => p.id === selected.project_id)!,
+                ),
+            )}
+            extra={
+              selected?.project_id &&
+              projects.find((p) => p.id === selected.project_id) &&
+              projectNeedsPreferredBridge(
+                projects.find((p) => p.id === selected.project_id)!,
+              )
+                ? "本地仓库项目必须指定执行器"
+                : "指定后固定用该执行器；忙则排队。留空自动分配空闲执行器"
+            }
           >
             <Select
-              allowClear
+              allowClear={
+                !(
+                  selected?.project_id &&
+                  projects.find((p) => p.id === selected.project_id) &&
+                  projectNeedsPreferredBridge(
+                    projects.find((p) => p.id === selected.project_id)!,
+                  )
+                )
+              }
               style={{ width: "100%" }}
               placeholder="自动选择空闲执行器"
               value={startBridgeId}

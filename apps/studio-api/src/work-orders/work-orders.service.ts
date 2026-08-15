@@ -15,6 +15,8 @@ import { In, type FindOptionsWhere, Repository } from "typeorm";
 import {
   AgentChatPostSchema,
   parseAgentMentions,
+  parseUserMentions,
+  WorkOrderCommentPostSchema,
   WorkOrderCreateSchema,
   WorkOrderDecisionSchema,
   WorkOrderRestartSchema,
@@ -25,6 +27,8 @@ import {
   type AgentChatMessage,
   type AgentChatThread,
   type WorkOrder,
+  type WorkOrderComment,
+  type WorkOrderCommentThread,
   type WorkOrderCreate,
   type WorkOrderRepoTarget,
   type WorkOrderRunEvent,
@@ -33,11 +37,13 @@ import {
   type PipelineStep,
   type BridgeExecutor,
   normalizePipelineGraph,
+  projectNeedsPreferredBridge,
 } from "@agent-studio/agent-schema";
 import { bridgeStageForAgent } from "@agent-studio/orchestrator";
 import { PipelinesService } from "../pipelines/pipelines.service";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
 import { BridgesService } from "../bridges/bridges.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { ProjectsService } from "../projects/projects.service";
 import { RealtimeHub } from "../realtime/realtime.hub";
 import { RunLogsService } from "../run-logs/run-logs.service";
@@ -51,6 +57,10 @@ import {
   appendAgentChatMessages,
   loadAgentChatThread,
 } from "./agent-chat.store";
+import {
+  appendWorkOrderComment,
+  loadWorkOrderComments,
+} from "./work-order-comments.store";
 import { WorkOrderEntity } from "./entities/work-order.entity";
 import {
   type ProjectRouting,
@@ -83,6 +93,7 @@ export class WorkOrdersService implements OnModuleInit {
     private readonly realtime: RealtimeHub,
     private readonly studioConfig: StudioConfigService,
     private readonly bridges: BridgesService,
+    private readonly notifications: NotificationsService,
     @Inject(forwardRef(() => WorkOrderStudioRunner))
     private readonly studioRunner: WorkOrderStudioRunner,
   ) {}
@@ -398,6 +409,7 @@ export class WorkOrdersService implements OnModuleInit {
       throw new BadRequestException("创建工单需要 team_id（或绑定带团队的 project_id）");
     }
     await this.teams.requireWritableMember(teamId, userId);
+    let preferredBridgeId = (body.preferred_bridge_id || "").trim();
     if (projectId) {
       await this.assertProjectBindingForUser(userId, projectId);
       const project = await this.projects.getById(projectId);
@@ -406,6 +418,10 @@ export class WorkOrdersService implements OnModuleInit {
           `工单 team_id=${teamId} 与项目 team_id=${project.team_id} 不一致`,
         );
       }
+      if (!preferredBridgeId) {
+        preferredBridgeId = (project.preferred_bridge_id || "").trim();
+      }
+      await this.assertBridgeForLocalProject(projectId, preferredBridgeId);
     }
 
     return this.write(
@@ -413,6 +429,7 @@ export class WorkOrdersService implements OnModuleInit {
         ...body,
         team_id: teamId,
         project_id: projectId,
+        preferred_bridge_id: preferredBridgeId,
         status: body.status || "draft",
         run: null,
       }),
@@ -441,6 +458,20 @@ export class WorkOrdersService implements OnModuleInit {
         run: current.run,
         status: current.status === "draft" ? current.status : current.status,
       });
+      const projectId = (merged.project_id || "").trim();
+      if (projectId) {
+        let preferred = (merged.preferred_bridge_id || "").trim();
+        if (!preferred) {
+          try {
+            const project = await this.projects.getById(projectId);
+            preferred = (project.preferred_bridge_id || "").trim();
+          } catch {
+            /* ignore */
+          }
+          if (preferred) merged.preferred_bridge_id = preferred;
+        }
+        await this.assertBridgeForLocalProject(projectId, preferred);
+      }
       return this.write(merged);
     } catch (err) {
       if (
@@ -541,7 +572,7 @@ export class WorkOrdersService implements OnModuleInit {
     const text = message.trim();
     if (!text) throw new BadRequestException("消息不能为空");
 
-    if (this.studioRunner.isBusy(id)) {
+    if (await this.studioRunner.isBusyAsync(id)) {
       throw new ConflictException(
         "Studio 编排正在执行，请稍后再 @ 数字人",
       );
@@ -698,6 +729,95 @@ export class WorkOrdersService implements OnModuleInit {
     return this.postAgentChat(id, body);
   }
 
+  async listComments(
+    id: string,
+    userId: string,
+  ): Promise<WorkOrderCommentThread> {
+    await this.getForUser(userId, id);
+    return loadWorkOrderComments(id);
+  }
+
+  async postComment(
+    id: string,
+    user: { id: string; username?: string; display_name?: string },
+    body: unknown,
+  ): Promise<{ thread: WorkOrderCommentThread; order: WorkOrder }> {
+    const order = await this.requireWritableWorkOrder(user.id, id);
+    let text: string;
+    try {
+      text = WorkOrderCommentPostSchema.parse(body).body.trim();
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    if (!text) throw new BadRequestException("评论不能为空");
+
+    const teamId = (order.team_id || "").trim();
+    if (!teamId) {
+      throw new BadRequestException("工单缺少 team_id，无法解析 @提及");
+    }
+    const detail = await this.teams.getDetail(teamId, user.id);
+    const mentions = parseUserMentions(
+      text,
+      detail.members.map((m) => ({
+        id: m.user_id,
+        username: m.username,
+        display_name: m.display_name,
+      })),
+    );
+
+    const authorName =
+      (user.display_name || "").trim() ||
+      (user.username || "").trim() ||
+      user.id;
+    const comment: WorkOrderComment = {
+      id: randomUUID().slice(0, 8),
+      work_order_id: id,
+      author_user_id: user.id,
+      author_name: authorName,
+      body: text,
+      mentioned_user_ids: mentions.mentioned.map((m) => m.id),
+      created_at: this.nowIso(),
+    };
+    const thread = await appendWorkOrderComment(id, comment);
+
+    if (mentions.mentioned.length) {
+      this.notifications.scheduleCommentMention({
+        team_id: teamId,
+        work_order_id: order.id,
+        work_order_title: order.title || order.id,
+        author_name: authorName,
+        body: text,
+        mentioned_names: mentions.mentioned.map((m) => m.name),
+      });
+      const recipientIds = mentions.mentioned
+        .map((m) => m.id)
+        .filter((id) => id !== user.id);
+      void this.notifications.createInboxMany({
+        team_id: teamId,
+        user_ids: recipientIds,
+        kind: "comment_mention",
+        title: `${authorName} 在评论中提及了你`,
+        body: text.slice(0, 500),
+        work_order_id: order.id,
+        actor_user_id: user.id,
+        actor_name: authorName,
+      });
+    }
+
+    this.appendRunEvent(order, {
+      type: "info",
+      message: `${authorName} 发表评论${
+        mentions.mentioned.length
+          ? ` · 提及 ${mentions.mentioned.map((m) => `@${m.name}`).join(" ")}`
+          : ""
+      }：${text.slice(0, 120)}${text.length > 120 ? "…" : ""}`,
+    });
+    const saved = await this.write(order);
+    return { thread, order: saved };
+  }
+
   /** Jump back to a previous/named step and re-run (manager rework). */
   async rework(_id: string, _stepId: string, _feedback = ""): Promise<WorkOrder> {
     throw new BadRequestException(
@@ -777,6 +897,32 @@ export class WorkOrdersService implements OnModuleInit {
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
       throw new BadRequestException(`项目不存在: ${id}`);
+    }
+  }
+
+  /** When project uses absolute local repos, preferred_bridge_id is mandatory. */
+  private async assertBridgeForLocalProject(
+    projectId: string | undefined,
+    preferredBridgeId: string | undefined,
+  ) {
+    const id = (projectId || "").trim();
+    if (!id) return;
+    let project;
+    try {
+      project = await this.projects.getById(id);
+    } catch {
+      return;
+    }
+    if (!projectNeedsPreferredBridge(project)) return;
+    const bridge = (
+      preferredBridgeId ||
+      project.preferred_bridge_id ||
+      ""
+    ).trim();
+    if (!bridge) {
+      throw new BadRequestException(
+        "项目使用了本地仓库绝对路径，必须指定执行器（preferred_bridge_id）",
+      );
     }
   }
 
@@ -994,11 +1140,10 @@ export class WorkOrdersService implements OnModuleInit {
 
     const executor = "studio" as const;
     const cfg = this.studioConfig.getEffectiveForTeam(order.team_id || "");
-    const preferredBridgeId = (
-      body.preferred_bridge_id !== undefined
-        ? body.preferred_bridge_id
-        : order.preferred_bridge_id || ""
-    ).trim();
+    const preferredBridgeId = await this.resolvePreferredBridgeId(
+      order,
+      body.preferred_bridge_id,
+    );
     const resolved = await this.bridges.resolveForNewRun({
       teamId: order.team_id,
       override: body.bridge_base_url,
@@ -1139,6 +1284,38 @@ export class WorkOrdersService implements OnModuleInit {
     return this.start(id, input);
   }
 
+  /**
+   * Prefer explicit start override → work-order pin → project pin.
+   * Projects with absolute local_path repos require a Bridge id.
+   */
+  private async resolvePreferredBridgeId(
+    order: WorkOrder,
+    bodyPreferred?: string | null,
+  ): Promise<string> {
+    let preferred = (
+      bodyPreferred !== undefined && bodyPreferred !== null
+        ? bodyPreferred
+        : order.preferred_bridge_id || ""
+    ).trim();
+    const projectId = (order.project_id || "").trim();
+    if (!projectId) return preferred;
+    try {
+      const project = await this.projects.getById(projectId);
+      const projectBridge = (project.preferred_bridge_id || "").trim();
+      if (!preferred) preferred = projectBridge;
+      if (projectNeedsPreferredBridge(project) && !preferred) {
+        throw new BadRequestException(
+          "项目使用了本地仓库绝对路径，必须指定执行器（preferred_bridge_id）",
+        );
+      }
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      if (err instanceof NotFoundException) return preferred;
+      throw err;
+    }
+    return preferred;
+  }
+
   /** Soft-queue a start until a team Bridge becomes idle. */
   private async enqueueForBridge(
     order: WorkOrder,
@@ -1147,19 +1324,15 @@ export class WorkOrdersService implements OnModuleInit {
   ): Promise<WorkOrder> {
     const stamp = this.nowIso();
     const pipeline = await this.pipelines.get(body.pipeline_id);
-    const preferredBridgeId = (
-      body.preferred_bridge_id !== undefined
-        ? body.preferred_bridge_id
-        : order.preferred_bridge_id || ""
-    ).trim();
+    const preferredBridgeId = await this.resolvePreferredBridgeId(
+      order,
+      body.preferred_bridge_id,
+    );
     const next = WorkOrderSchema.parse({
       ...order,
       status: "queued",
       pipeline_id: pipeline.id,
-      preferred_bridge_id:
-        body.preferred_bridge_id !== undefined
-          ? preferredBridgeId
-          : order.preferred_bridge_id || "",
+      preferred_bridge_id: preferredBridgeId || order.preferred_bridge_id || "",
       run: {
         run_id: `q-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
         pipeline_id: pipeline.id,
@@ -1544,7 +1717,11 @@ export class WorkOrdersService implements OnModuleInit {
    */
   async finishCurrentRepoAndContinue(order: WorkOrder): Promise<WorkOrder> {
     const prepared = await this.markCurrentRepoCompleted(order);
-    if (prepared.done) return await this.write(prepared.order);
+    if (prepared.done) {
+      const saved = await this.write(prepared.order);
+      this.notifications.scheduleWorkOrderEvent(saved, "completed");
+      return saved;
+    }
 
     const saved = await this.write(prepared.order);
     const cfg = this.studioConfig.getEffectiveForTeam(saved.team_id || "");

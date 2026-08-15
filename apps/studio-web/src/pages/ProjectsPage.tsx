@@ -26,13 +26,16 @@ import {
   ReloadOutlined,
 } from "@ant-design/icons";
 import type {
+  BridgeExecutor,
   Project,
   ProjectCreate,
   ProjectRepo,
   ProjectRepoRole,
   TeamListItem,
 } from "@agent-studio/agent-schema";
+import { projectNeedsPreferredBridge } from "@agent-studio/agent-schema";
 import { teamsApi } from "../api/auth";
+import { bridgesApi } from "../api/bridges";
 import { projectsApi } from "../api/projects";
 import { getSelectedTeam } from "../auth/session";
 import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
@@ -43,6 +46,7 @@ type EditorValues = {
   name: string;
   description?: string;
   clone_root?: string;
+  preferred_bridge_id?: string;
   enabled: boolean;
   tags?: string[];
   repos: Array<{
@@ -86,7 +90,26 @@ export function ProjectsPage() {
   const [cloning, setCloning] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [bridges, setBridges] = useState<BridgeExecutor[]>([]);
   const [form] = Form.useForm<EditorValues>();
+  const reposWatch = Form.useWatch("repos", form);
+  const needsBridge = useMemo(() => {
+    const repos = reposWatch || [];
+    return repos.some(
+      (r) =>
+        r?.source === "local" ||
+        Boolean((r?.local_path || "").trim().match(/^([/\\]|[a-zA-Z]:[\\/])/)),
+    );
+  }, [reposWatch]);
+
+  const bridgeOptions = useMemo(
+    () =>
+      bridges.map((b) => ({
+        value: b.id,
+        label: `${b.name || b.id} · ${b.status}${b.driver ? ` · ${b.driver}` : ""}`,
+      })),
+    [bridges],
+  );
 
   const selected = useMemo(
     () => items.find((p) => p.id === selectedId) || null,
@@ -97,16 +120,18 @@ export function ProjectsPage() {
     setLoading(true);
     try {
       const currentTeam = getSelectedTeam();
-      const [res, teamRes] = await Promise.all([
+      const [res, teamRes, bridgeRes] = await Promise.all([
         projectsApi.list({
           q,
           team_id: currentTeam?.id,
         }),
         teamsApi.list(),
+        bridgesApi.list({ team_id: currentTeam?.id }).catch(() => ({ items: [] as BridgeExecutor[] })),
       ]);
       setItems(res.items);
       setTotal(res.total);
       setTeams(teamRes.items);
+      setBridges(bridgeRes.items || []);
       if (res.default_clone_root) setDefaultCloneRoot(res.default_clone_root);
       const nextId = keepId === undefined ? selectedId : keepId;
       if (nextId && !res.items.some((p) => p.id === nextId)) {
@@ -135,6 +160,7 @@ export function ProjectsPage() {
       name: "",
       description: "",
       clone_root: "",
+      preferred_bridge_id: "",
       enabled: true,
       tags: [],
       repos: [
@@ -162,6 +188,7 @@ export function ProjectsPage() {
       name: project.name,
       description: project.description,
       clone_root: project.clone_root,
+      preferred_bridge_id: project.preferred_bridge_id || "",
       enabled: project.enabled,
       tags: project.tags,
       repos: project.repos.map((r) => {
@@ -211,12 +238,23 @@ export function ProjectsPage() {
           note: (r.note || "").trim(),
         };
       });
+      const preferred_bridge_id = (values.preferred_bridge_id || "").trim();
+      const hasLocalSource = (values.repos || []).some(
+        (r) => r.source === "local",
+      );
+      if (
+        (hasLocalSource || projectNeedsPreferredBridge({ repos })) &&
+        !preferred_bridge_id
+      ) {
+        throw new Error("使用本地仓库路径时必须选择执行器");
+      }
       const payload: ProjectCreate = {
         id: values.id.trim(),
         team_id: values.team_id,
         name: values.name.trim(),
         description: (values.description || "").trim(),
         clone_root: (values.clone_root || "").trim(),
+        preferred_bridge_id,
         enabled: values.enabled !== false,
         tags: values.tags || [],
         repos,
@@ -381,6 +419,13 @@ export function ProjectsPage() {
                   <Tag color={selected.enabled ? "green" : "default"}>
                     {selected.enabled ? "启用" : "停用"}
                   </Tag>
+                  {selected.preferred_bridge_id ? (
+                    <Tag color="purple">
+                      执行器 {selected.preferred_bridge_id}
+                    </Tag>
+                  ) : projectNeedsPreferredBridge(selected) ? (
+                    <Tag color="error">本地仓库未指定执行器</Tag>
+                  ) : null}
                   {(selected.tags || []).map((t) => (
                     <Tag key={t}>{t}</Tag>
                   ))}
@@ -529,6 +574,30 @@ export function ProjectsPage() {
                   ? `留空 → ${defaultCloneRoot}/{id}`
                   : "/abs/path/to/repos 或留空"
               }
+            />
+          </Form.Item>
+          <Form.Item
+            name="preferred_bridge_id"
+            label="执行器"
+            required={needsBridge}
+            rules={
+              needsBridge
+                ? [{ required: true, message: "使用本地仓库时必须选择执行器" }]
+                : []
+            }
+            tooltip="本地目录在 Bridge 执行机上；选「使用已有本地目录」时必须指定对应执行器"
+            extra={
+              needsBridge
+                ? "当前有仓库使用本地路径，必须指定执行器"
+                : "可选；本地仓库模式下必填"
+            }
+          >
+            <Select
+              allowClear={!needsBridge}
+              placeholder={
+                needsBridge ? "请选择执行器" : "可选（本地仓库时必选）"
+              }
+              options={bridgeOptions}
             />
           </Form.Item>
           <Row gutter={16}>

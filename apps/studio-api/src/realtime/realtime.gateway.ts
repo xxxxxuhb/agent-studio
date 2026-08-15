@@ -33,6 +33,7 @@ export class RealtimeGateway
   private unsubWo?: () => void;
   private unsubBridge?: () => void;
   private unsubBridges?: () => void;
+  private unsubNotif?: () => void;
 
   @WebSocketServer()
   server!: Server;
@@ -53,12 +54,18 @@ export class RealtimeGateway
     this.unsubBridges = this.hub.onBridges((items) => {
       this.server?.to("bridges:watch").emit("bridges", { items });
     });
+    this.unsubNotif = this.hub.onNotification((notification) => {
+      this.server
+        ?.to(this.notifRoom(notification.team_id, notification.user_id))
+        .emit("notification", notification);
+    });
   }
 
   onModuleDestroy() {
     this.unsubWo?.();
     this.unsubBridge?.();
     this.unsubBridges?.();
+    this.unsubNotif?.();
   }
 
   handleConnection(client: Socket) {
@@ -76,6 +83,32 @@ export class RealtimeGateway
   @SubscribeMessage("unsubscribe_bridges")
   unsubscribeBridges(@ConnectedSocket() client: Socket) {
     client.leave("bridges:watch");
+    return { ok: true };
+  }
+
+  @SubscribeMessage("subscribe_notifications")
+  subscribeNotifications(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { team_id?: string; user_id?: string },
+  ) {
+    const teamId = body?.team_id?.trim();
+    const userId = body?.user_id?.trim();
+    if (!teamId || !userId) {
+      return { ok: false, error: "team_id and user_id required" };
+    }
+    client.join(this.notifRoom(teamId, userId));
+    return { ok: true, team_id: teamId, user_id: userId };
+  }
+
+  @SubscribeMessage("unsubscribe_notifications")
+  unsubscribeNotifications(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { team_id?: string; user_id?: string },
+  ) {
+    const teamId = body?.team_id?.trim();
+    const userId = body?.user_id?.trim();
+    if (!teamId || !userId) return { ok: false };
+    client.leave(this.notifRoom(teamId, userId));
     return { ok: true };
   }
 
@@ -116,5 +149,9 @@ export class RealtimeGateway
 
   private room(id: string) {
     return `wo:${id}`;
+  }
+
+  private notifRoom(teamId: string, userId: string) {
+    return `notif:${teamId}:${userId}`;
   }
 }

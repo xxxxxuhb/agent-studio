@@ -654,6 +654,45 @@ export {
 } from "./mentions";
 
 export {
+  parseUserMentions,
+  type MentionUser,
+  type ParsedUserMention,
+  type ParseUserMentionsResult,
+} from "./user-mentions";
+
+export {
+  WorkOrderCommentSchema,
+  WorkOrderCommentThreadSchema,
+  WorkOrderCommentPostSchema,
+  type WorkOrderComment,
+  type WorkOrderCommentThread,
+  type WorkOrderCommentPost,
+} from "./work-order-comments";
+
+export {
+  SystemNotificationKindSchema,
+  SystemNotificationSchema,
+  SystemNotificationListSchema,
+  SystemNotificationMarkReadSchema,
+  type SystemNotificationKind,
+  type SystemNotification,
+  type SystemNotificationList,
+  type SystemNotificationMarkRead,
+} from "./system-notification";
+
+export {
+  WorkOrderAttachmentSchema,
+  WorkOrderAttachmentListSchema,
+  WORK_ORDER_ATTACHMENT_MAX_BYTES,
+  WORK_ORDER_ATTACHMENT_MAX_TOTAL_BYTES,
+  WORK_ORDER_ATTACHMENT_MAX_COUNT,
+  isAllowedAttachmentContentType,
+  sanitizeAttachmentFilename,
+  type WorkOrderAttachment,
+  type WorkOrderAttachmentList,
+} from "./work-order-attachments";
+
+export {
   DigitalHumanBridgeBindingSchema,
   bridgeBindingFromLegacy,
   type DigitalHumanBridgeBinding,
@@ -667,6 +706,8 @@ export {
   ProjectRepoCreateSchema,
   ProjectRepoRoleSchema,
   ProjectRepoCloneStatusSchema,
+  isAbsoluteRepoLocalPath,
+  projectNeedsPreferredBridge,
   type Project,
   type ProjectCreate,
   type ProjectUpdate,
@@ -746,11 +787,13 @@ export {
   StudioConfigPublicSchema,
   TeamSecretsSchema,
   TeamSecretsPublicSchema,
+  NotifyEventSchema,
   type StudioLanguage,
   type StudioConfig,
   type StudioConfigPublic,
   type TeamSecrets,
   type TeamSecretsPublic,
+  type NotifyEvent,
 } from "./studio";
 
 export {

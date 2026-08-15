@@ -10,9 +10,12 @@ import { RunLogMetaEntity } from "../run-logs/entities/run-log-meta.entity";
 import { RunArtifactEntity } from "../run-logs/entities/run-artifact.entity";
 import { UsageEventEntity } from "../usage/entities/usage-event.entity";
 import { AuditLogEntity } from "../audit/entities/audit-log.entity";
+import { NotificationEntity } from "../notifications/entities/notification.entity";
 import { TeamEntity } from "../teams/entities/team.entity";
 import { TeamMemberEntity } from "../teams/entities/team-member.entity";
 import { WorkOrderEntity } from "../work-orders/entities/work-order.entity";
+import { StudioJobEntity } from "../work-orders/entities/studio-job.entity";
+import { WorkOrderAttachmentEntity } from "../work-orders/entities/work-order-attachment.entity";
 
 function mysqlConfig() {
   const host = process.env.STUDIO_MYSQL_HOST?.trim() || "127.0.0.1";
@@ -34,11 +37,14 @@ function mysqlConfig() {
         TeamMemberEntity,
         ProjectEntity,
         WorkOrderEntity,
+        StudioJobEntity,
+        WorkOrderAttachmentEntity,
         RunLogMetaEntity,
         RunLogEntryEntity,
         RunArtifactEntity,
         UsageEventEntity,
         AuditLogEntity,
+        NotificationEntity,
         DigitalHumanEntity,
         PipelineEntity,
         BridgeEntity,

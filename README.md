@@ -5,6 +5,7 @@
 - Monorepo（npm workspaces）
 - 后端：NestJS（`apps/studio-api`）
 - 前端：React + Vite（`apps/studio-web`）
+- 移动控制面：Expo（`apps/studio-mobile`）— 只调 API，不跑 Bridge
 - Bridge：Fastify（`apps/studio-bridge`）— Studio 编排器的执行端
 - 编排：`packages/orchestrator`（按流水线步骤调 Bridge）
 - Agent 运行时：`packages/agent-runtime`（可切换 cursor / trae / qoder / 自定义驱动）
@@ -15,6 +16,7 @@
 ```text
 apps/studio-api        NestJS API :8790
 apps/studio-web        React UI   :5173
+apps/studio-mobile     Expo 控制面（API + Socket）
 apps/studio-bridge     Bridge API :8787
 packages/agent-schema  Zod / 类型
 packages/agent-runtime 可插拔 Agent 驱动

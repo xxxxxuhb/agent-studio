@@ -1,5 +1,6 @@
 import { get, put } from "../http";
 import type {
+  NotifyEvent,
   StudioConfig,
   StudioConfigPublic,
   StudioLanguage,
@@ -18,6 +19,11 @@ export type StudioSettingsUpdate = Partial<
   >
 > & {
   language?: StudioLanguage;
+  slack_webhook_url?: string;
+  feishu_webhook_url?: string;
+  clear_slack_webhook_url?: boolean;
+  clear_feishu_webhook_url?: boolean;
+  notify_on?: NotifyEvent[];
 };
 
 export const settingsApi = {

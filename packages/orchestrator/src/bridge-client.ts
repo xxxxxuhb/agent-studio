@@ -108,5 +108,24 @@ export function createHttpBridgeClient(
       }
       return data;
     },
+
+    async writeInbox(runId, files) {
+      const { status, data } = await request(
+        "POST",
+        `/runs/${encodeURIComponent(runId)}/inbox`,
+        { files },
+      );
+      if (status < 200 || status >= 300) {
+        const msg =
+          (data as { message?: string; error?: string })?.message ||
+          (data as { error?: string })?.error ||
+          `Bridge writeInbox failed (${status})`;
+        throw Object.assign(new Error(String(msg)), {
+          statusCode: status,
+          data,
+        });
+      }
+      return data as { written: string[] };
+    },
   };
 }

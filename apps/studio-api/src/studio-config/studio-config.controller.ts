@@ -41,13 +41,20 @@ export class StudioConfigController {
   async update(
     @CurrentUser() user: RequestUser,
     @Query("team_id") team_id: string | undefined,
-    @Body() body: Partial<StudioConfig>,
+    @Body()
+    body: Partial<StudioConfig> & {
+      slack_webhook_url?: string;
+      feishu_webhook_url?: string;
+      clear_slack_webhook_url?: boolean;
+      clear_feishu_webhook_url?: boolean;
+      notify_on?: string[];
+    },
   ) {
     const tid = this.requireTeamId(team_id);
     await this.teams.requireWritableMember(tid, user.id);
     const keys = Object.keys(body || {}).filter(Boolean);
     const secretKeys = keys.filter((k) =>
-      /secret|ssh_key|password|token|api_key/i.test(k),
+      /secret|ssh_key|password|token|api_key|webhook/i.test(k),
     );
     this.config.updateForTeam(tid, body);
     void this.audit

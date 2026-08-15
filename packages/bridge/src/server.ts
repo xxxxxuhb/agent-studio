@@ -149,6 +149,32 @@ export function createBridgeApp() {
     }
   });
 
+  /** Human → Agent inbox files under docs/runs/{id}/inbox/. */
+  app.post("/runs/:id/inbox", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        files: z
+          .array(
+            z.object({
+              name: z.string().min(1),
+              content_base64: z.string().min(1),
+              content_type: z.string().optional(),
+            }),
+          )
+          .max(20),
+      })
+      .parse(req.body ?? {});
+    try {
+      const { writeRunInboxFiles } = await import("./artifacts.js");
+      const result = writeRunInboxFiles(id, body.files);
+      return reply.code(201).send(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: "bad_request", message });
+    }
+  });
+
   /** Opt-in disk GC (auth required). Default dry-run unless body.apply=true. */
   app.post("/admin/gc", async (req) => {
     const body = z

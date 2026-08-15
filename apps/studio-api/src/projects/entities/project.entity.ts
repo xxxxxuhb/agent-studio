@@ -26,6 +26,10 @@ export class ProjectEntity {
   @Column({ type: "varchar", length: 512, default: "" })
   clone_root!: string;
 
+  /** Preferred Bridge when repos use absolute local_path on that host. */
+  @Column({ type: "varchar", length: 64, default: "" })
+  preferred_bridge_id!: string;
+
   @Column({ type: "json" })
   repos!: ProjectRepo[];
 

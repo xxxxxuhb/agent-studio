@@ -501,6 +501,10 @@ export async function startStudioRun(
     );
   }
 
+  if (input.inbox_files?.length && input.bridge.writeInbox) {
+    await input.bridge.writeInbox(bridgeRunId, input.inbox_files);
+  }
+
   const state: StudioRunState = {
     bridge_run_id: bridgeRunId,
     bridge_base_url: input.bridge_base_url,
@@ -578,6 +582,11 @@ export async function applyStudioDecision(
   const step = steps[current_step_index];
   if (!step) {
     return fail(state, current_step_index, "no current step for decision");
+  }
+
+  const bridgeRunId = (state.bridge_run_id || "").trim();
+  if (input.inbox_files?.length && bridge.writeInbox && bridgeRunId) {
+    await bridge.writeInbox(bridgeRunId, input.inbox_files);
   }
 
   const graph = graphOf(steps, { entry: input.entry, edges: input.edges });
@@ -675,6 +684,9 @@ export async function resumeStudioRun(
       input.current_step_index,
       "无法续跑：缺少 Bridge run id，请改用「重新执行」",
     );
+  }
+  if (input.inbox_files?.length && input.bridge.writeInbox) {
+    await input.bridge.writeInbox(bridgeRunId, input.inbox_files);
   }
   if (!input.steps.length) {
     return fail(

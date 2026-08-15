@@ -59,6 +59,15 @@ export type BridgeClient = {
     runId: string,
     body: { decision: "approve" | "reject"; feedback?: string },
   ): Promise<unknown>;
+  /** Push human attachments into docs/runs/{id}/inbox/. */
+  writeInbox?(
+    runId: string,
+    files: Array<{
+      name: string;
+      content_base64: string;
+      content_type?: string;
+    }>,
+  ): Promise<{ written: string[] }>;
 };
 
 export type OrchestratorStep = {
@@ -144,6 +153,12 @@ export type StartStudioRunInput = {
   title?: string;
   /** Fired after createRun and after each successful stage (for live UI). */
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
+  /** Human attachments to write under Bridge docs/runs/{id}/inbox/ after createRun. */
+  inbox_files?: Array<{
+    name: string;
+    content_base64: string;
+    content_type?: string;
+  }>;
 };
 
 export type ApplyDecisionInput = {
@@ -162,6 +177,11 @@ export type ApplyDecisionInput = {
   title?: string;
   raw_requirement?: string;
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
+  inbox_files?: Array<{
+    name: string;
+    content_base64: string;
+    content_type?: string;
+  }>;
 };
 
 /** Resume a failed stage on an existing Bridge run (no createRun). */
@@ -180,6 +200,11 @@ export type ResumeStudioRunInput = {
   title?: string;
   raw_requirement?: string;
   onProgress?: (progress: OrchestratorProgress) => Promise<void> | void;
+  inbox_files?: Array<{
+    name: string;
+    content_base64: string;
+    content_type?: string;
+  }>;
 };
 
 /** Resume a wait_event step when an external event arrives. */
