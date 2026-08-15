@@ -19,6 +19,7 @@ import type {
 import { digitalHumansApi } from "../api/digital-humans";
 import { workOrdersApi } from "../api/work-orders";
 import { getSelectedTeam } from "../auth/session";
+import { MarkdownBody } from "./MarkdownBody";
 
 type Props = {
   order: WorkOrder;
@@ -155,11 +156,18 @@ export function WorkOrderAgentChat({ order, onOrderUpdate, fill }: Props) {
                   {new Date(m.created_at).toLocaleTimeString()}
                 </Typography.Text>
               </div>
-              <Typography.Paragraph
-                style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
-              >
-                {m.content}
-              </Typography.Paragraph>
+              {m.role === "user" ? (
+                <Typography.Paragraph
+                  style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
+                >
+                  {m.content}
+                </Typography.Paragraph>
+              ) : (
+                <MarkdownBody
+                  className="wo-agent-chat-md"
+                  content={m.content}
+                />
+              )}
             </div>
           ))
         ) : (

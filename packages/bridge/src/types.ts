@@ -16,7 +16,9 @@ export const AgentsConfigSchema = z.object({
     name: z.string(),
     repo_path: z.string(),
     default_branch: z.string().default("main"),
-    role: z.enum(["frontend", "backend", "fullstack", "unknown"]).optional(),
+    role: z
+      .enum(["frontend", "backend", "fullstack", "docs", "infra", "unknown"])
+      .optional(),
     remote: z.string().optional(),
     depends_on: z.array(z.string()).optional(),
   }),

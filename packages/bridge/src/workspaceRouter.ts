@@ -3,7 +3,13 @@ import path from "node:path";
 import { loadAgentsConfig } from "./config.js";
 import type { AgentsConfig } from "./types.js";
 
-export type RepoRole = "frontend" | "backend" | "fullstack" | "unknown";
+export type RepoRole =
+  | "frontend"
+  | "backend"
+  | "fullstack"
+  | "docs"
+  | "infra"
+  | "unknown";
 
 export interface WorkspaceCandidate {
   agentsMdPath: string;

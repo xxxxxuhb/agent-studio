@@ -673,6 +673,20 @@ body {
   border-color: #ffd591;
 }
 
+.wo-agent-chat-md {
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.wo-agent-chat-md > :first-child {
+  margin-top: 0;
+}
+
+.wo-agent-chat-md > :last-child {
+  margin-bottom: 0;
+}
+
 .wo-agent-chat-meta {
   display: flex;
   flex-wrap: wrap;

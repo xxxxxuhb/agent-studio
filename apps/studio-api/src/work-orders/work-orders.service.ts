@@ -618,6 +618,12 @@ export class WorkOrdersService implements OnModuleInit {
         stage: result.stage || stage,
       };
 
+      // Chatting after the run ended is a side conversation: it must not
+      // re-open human approval or drag the run back to "running".
+      const runOver =
+        order.status === "completed" ||
+        order.status === "rejected" ||
+        order.status === "failed";
       order.run.studio = {
         ...order.run.studio!,
         bridge_run_id: result.runId || bridgeRunId,
@@ -625,8 +631,10 @@ export class WorkOrdersService implements OnModuleInit {
         current_stage: result.stage || stage,
         last_summary: summary,
         dry_run: Boolean(order.run.studio?.dry_run),
-        pending_human: Boolean(result.pendingHumanApproval),
-        status: order.run.studio?.status || "running",
+        pending_human: runOver ? false : Boolean(result.pendingHumanApproval),
+        status: runOver
+          ? order.run.studio?.status || order.status
+          : order.run.studio?.status || "running",
         error: null,
         last_synced_at: this.nowIso(),
       };
@@ -1455,6 +1463,13 @@ export class WorkOrdersService implements OnModuleInit {
     if (!targets.length) {
       order.status = "completed";
       run.finished_at = stamp;
+      if (run.studio) {
+        run.studio.status = "completed";
+        run.studio.pending_human = false;
+        run.studio.last_summary = "运行完成";
+        run.studio.error = null;
+        run.studio.last_synced_at = stamp;
+      }
       this.appendRunEvent(order, {
         type: "run_finished",
         message: "运行完成（无多仓队列）",
@@ -1480,9 +1495,17 @@ export class WorkOrdersService implements OnModuleInit {
     if (nextIdx >= targets.length) {
       order.status = "completed";
       run.finished_at = stamp;
+      const doneMsg = `全部仓库按序完成：${targets.map((t) => t.repo_id).join(" → ")}`;
+      if (run.studio) {
+        run.studio.status = "completed";
+        run.studio.pending_human = false;
+        run.studio.last_summary = doneMsg;
+        run.studio.error = null;
+        run.studio.last_synced_at = stamp;
+      }
       this.appendRunEvent(order, {
         type: "run_finished",
-        message: `全部仓库按序完成：${targets.map((t) => t.repo_id).join(" → ")}`,
+        message: doneMsg,
       });
       return { order, done: true };
     }

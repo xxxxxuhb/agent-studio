@@ -18,6 +18,7 @@ import { RunLogsService } from "../run-logs/run-logs.service";
 import { UsageService } from "../usage/usage.service";
 import { AuditService } from "../audit/audit.service";
 import {
+  isTransientSummary,
   runStudioDecision,
   runStudioEvent,
   runStudioResume,
@@ -559,7 +560,10 @@ export class WorkOrderStudioRunner {
     job: (order: WorkOrder) => Promise<void>,
   ): void {
     const prev = this.studioInFlight.get(workOrderId);
-    const run = (async () => {
+    // Assign the promise that is stored in the map (including finally) so cleanup
+    // can compare by identity — `p.finally()` returns a *new* promise.
+    let run!: Promise<void>;
+    run = (async () => {
       if (prev) {
         try {
           await prev;
@@ -608,15 +612,12 @@ export class WorkOrderStudioRunner {
           );
         }
       }
-    })();
-    this.studioInFlight.set(
-      workOrderId,
-      run.finally(() => {
-        if (this.studioInFlight.get(workOrderId) === run) {
-          this.studioInFlight.delete(workOrderId);
-        }
-      }),
-    );
+    })().finally(() => {
+      if (this.studioInFlight.get(workOrderId) === run) {
+        this.studioInFlight.delete(workOrderId);
+      }
+    });
+    this.studioInFlight.set(workOrderId, run);
   }
 
   async applyOutcome(
@@ -631,7 +632,9 @@ export class WorkOrderStudioRunner {
       bridge_run_id: state.bridge_run_id || "",
       bridge_base_url: state.bridge_base_url || bridgeBaseUrl,
       current_stage: state.current_stage || "",
-      last_summary: state.last_summary || "",
+      last_summary: isTransientSummary(state.last_summary)
+        ? ""
+        : state.last_summary || "",
       pending_human: Boolean(state.pending_human),
       dry_run: Boolean(state.dry_run),
       status: state.status || outcome.kind,
@@ -641,17 +644,24 @@ export class WorkOrderStudioRunner {
 
     const idx = outcome.step_index;
     const step = order.run.steps[idx];
-    const summary =
+    const rawSummary =
       outcome.kind === "failed"
         ? outcome.error
         : "summary" in outcome
           ? outcome.summary
           : state.last_summary || "";
+    const summary = isTransientSummary(rawSummary) ? "" : rawSummary;
 
     if (step) {
-      step.summary = summary || step.summary;
+      // A finishing outcome carries no fresh stage result: keep what the agent produced.
+      const keepStepSummary =
+        outcome.kind === "completed" && Boolean(step.summary?.trim());
+      if (!keepStepSummary) step.summary = summary || step.summary;
       if ("stage_result" in outcome && outcome.stage_result) {
-        step.output = outcome.stage_result.summary || step.output;
+        const output = isTransientSummary(outcome.stage_result.summary)
+          ? ""
+          : outcome.stage_result.summary;
+        step.output = output || step.output;
         step.output_title =
           step.output_title || step.label || outcome.stage_result.stage;
         const arts = outcome.stage_result.artifacts || [];

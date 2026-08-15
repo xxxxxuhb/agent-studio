@@ -24,7 +24,10 @@ async function bootstrap() {
   });
 
   const boot = app.get(BootstrapService);
-  const defaultTeamId = await boot.resolveDefaultTeamId();
+  const defaultTeamId = await boot.runBootstrap();
+  if (!defaultTeamId) {
+    throw new Error("bootstrap failed: no default team id");
+  }
 
   const humans = app.get(DigitalHumansService);
   const seeded = await humans.seedDefaults(defaultTeamId);

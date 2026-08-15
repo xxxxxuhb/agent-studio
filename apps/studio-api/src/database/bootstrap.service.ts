@@ -51,7 +51,21 @@ export class BootstrapService implements OnModuleInit {
     private readonly runLogs: RunLogsService,
   ) {}
 
+  private bootstrapped = false;
+
   async onModuleInit() {
+    await this.runBootstrap();
+  }
+
+  /**
+   * Idempotent admin + default team + YAML migrate.
+   * Also invoked from main.ts so seeding always has a real team_id
+   * (Nest may not instantiate this provider early enough for OnModuleInit alone).
+   */
+  async runBootstrap(): Promise<string> {
+    if (this.bootstrapped) {
+      return this.resolveDefaultTeamId();
+    }
     const admin = await this.ensureAdmin();
     const team = await this.ensureDefaultTeam(admin.id);
     await this.migrateYamlProjects(team.id);
@@ -61,6 +75,8 @@ export class BootstrapService implements OnModuleInit {
     await this.migrateYamlPipelines(team.id);
     await this.migrateYamlBridges(team.id);
     await this.stampEmptyMysqlTeamIds(team.id);
+    this.bootstrapped = true;
+    return team.id;
   }
 
   async resolveDefaultTeamId(): Promise<string> {

@@ -71,6 +71,22 @@ function templateContext(order: WorkOrder) {
   };
 }
 
+/**
+ * Progress hints written by the API purely for the UI. The orchestrator would
+ * otherwise replay them as the previous stage result when a decision/event
+ * finishes the pipeline, overwriting the real step summary/output.
+ */
+const TRANSIENT_SUMMARY =
+  /^(Studio 编排启动中…|已提交 (approve|reject)，继续编排中…|事件 .+ 已到达，继续中…)$/;
+
+export function isTransientSummary(text?: string | null): boolean {
+  return TRANSIENT_SUMMARY.test((text || "").trim());
+}
+
+function carrySummary(text?: string | null): string {
+  return isTransientSummary(text) ? "" : text || "";
+}
+
 export function studioStateFromOutcome(
   outcome: OrchestratorOutcome,
   bridgeBaseUrl: string,
@@ -140,7 +156,7 @@ export async function runStudioDecision(opts: {
       bridge_run_id: run.studio.bridge_run_id,
       bridge_base_url: bridgeBaseUrl,
       current_stage: run.studio.current_stage,
-      last_summary: run.studio.last_summary,
+      last_summary: carrySummary(run.studio.last_summary),
       pending_human: run.studio.pending_human,
       dry_run: run.studio.dry_run,
       status: run.studio.status,
@@ -185,7 +201,7 @@ export async function runStudioResume(opts: {
       bridge_run_id: run.studio.bridge_run_id,
       bridge_base_url: bridgeBaseUrl,
       current_stage: run.studio.current_stage,
-      last_summary: run.studio.last_summary,
+      last_summary: carrySummary(run.studio.last_summary),
       pending_human: false,
       dry_run: run.studio.dry_run,
       status: "running",
@@ -228,7 +244,7 @@ export async function runStudioEvent(opts: {
       bridge_run_id: run.studio.bridge_run_id,
       bridge_base_url: bridgeBaseUrl,
       current_stage: run.studio.current_stage,
-      last_summary: run.studio.last_summary,
+      last_summary: carrySummary(run.studio.last_summary),
       pending_human: false,
       dry_run: run.studio.dry_run,
       status: "running",
