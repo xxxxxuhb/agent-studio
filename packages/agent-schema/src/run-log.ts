@@ -1,14 +1,16 @@
 import { z } from "zod";
 
-export const RunLogSourceSchema = z.enum([
-  "system",
-  "pipeline",
-  "agent",
-  "bridge",
-  "dify",
-  "manager",
-  "human",
-]);
+export const RunLogSourceSchema = z.preprocess(
+  (v) => (v === "dify" ? "bridge" : v),
+  z.enum([
+    "system",
+    "pipeline",
+    "agent",
+    "bridge",
+    "manager",
+    "human",
+  ]),
+);
 export type RunLogSource = z.infer<typeof RunLogSourceSchema>;
 
 export const RunLogLevelSchema = z.enum(["debug", "info", "warn", "error"]);
@@ -23,7 +25,7 @@ export const RunLogEntrySchema = z.object({
   source: RunLogSourceSchema,
   level: RunLogLevelSchema.default("info"),
   message: z.string(),
-  /** Longer payload (agent output, Dify form, Bridge summary, …) */
+  /** Longer payload (agent output, Bridge summary, …) */
   body: z.string().optional().default(""),
   step_id: z.string().optional(),
   agent: z.string().optional(),
@@ -54,8 +56,6 @@ export const RunLogMetaSchema = z.object({
   executor: z.string().optional().default(""),
   project_id: z.string().optional().default(""),
   work_order_status: z.string().optional().default(""),
-  /** Denormalized for search / correlation UI. */
-  dify_workflow_run_id: z.string().optional().default(""),
   bridge_run_id: z.string().optional().default(""),
   bridge_stage: z.string().optional().default(""),
   last_error: z.string().optional().default(""),

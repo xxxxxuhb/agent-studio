@@ -86,7 +86,7 @@ function artifactMap(config: AgentsConfig, runId: string): Record<string, string
       config.project.repo_path,
     ),
     review_doc: resolveRunPath(
-      config.pipeline.review_doc || "docs/dify-runs/{run_id}/review-report.md",
+      config.pipeline.review_doc || "docs/runs/{run_id}/review-report.md",
       runId,
       config.project.repo_path,
     ),
@@ -106,6 +106,27 @@ function artifactMap(config: AgentsConfig, runId: string): Record<string, string
       config.project.repo_path,
     ),
   };
+}
+
+/** Paths that actually exist as files (excludes runs_dir and undeclared templates). */
+export function existingArtifactFilePaths(
+  artifacts: Record<string, string>,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const [key, value] of Object.entries(artifacts || {})) {
+    if (key === "runs_dir") continue;
+    const p = (value || "").trim();
+    if (!p || seen.has(p)) continue;
+    try {
+      if (!fs.existsSync(p) || !fs.statSync(p).isFile()) continue;
+    } catch {
+      continue;
+    }
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
 }
 
 function pendingStatus(stage: Stage): RunStatus {
@@ -155,7 +176,7 @@ export function createRun(input: {
   const hint = (input.agentsMdPath || "").trim();
   let mode = input.routingMode || (hint && hint !== "auto" ? "explicit" : "auto");
 
-  // Dify published workflows often omit routing_mode in the HTTP body.
+  // Published workflow bodies often omit routing_mode.
   // If Studio already sent a real AGENTS.md path, never keyword-reroute away from it.
   if (hint && hint.toLowerCase() !== "auto") {
     const abs = path.resolve(hint);
@@ -351,7 +372,7 @@ export async function executeStage(
   if (stage === "review") {
     // Review agent owns git commit/push + commit-record.md; Bridge only opens MR/PR.
     const commitRecord = resolveRunPath(
-      "docs/dify-runs/{run_id}/commit-record.md",
+      "docs/runs/{run_id}/commit-record.md",
       run.id,
       config.project.repo_path,
     );
@@ -412,11 +433,12 @@ export async function executeStage(
     stage,
     status: "ok",
     summary,
-    artifacts: Object.values(artifacts),
+    artifacts: existingArtifactFilePaths(artifacts),
     pendingHumanApproval: stage !== "manager",
     raw: result.raw,
     driver: result.driver,
     dryRun: result.dryRun,
+    usage: result.usage,
   };
 }
 
@@ -436,7 +458,7 @@ export function approveStage(
     return run;
   }
 
-  // Default full Bridge order. Dify may call a subset (e.g. code-dev ends at review).
+  // Default full Bridge order. Callers may run a subset (e.g. end at review).
   const order: Stage[] = [
     "requirement",
     "plan",

@@ -28,7 +28,7 @@ export const AgentsConfigSchema = z.object({
     review_doc: z
       .string()
       .optional()
-      .default("docs/dify-runs/{run_id}/review-report.md"),
+      .default("docs/runs/{run_id}/review-report.md"),
     test_report: z.string(),
     release_notes: z.string(),
     status_doc: z.string(),
@@ -108,4 +108,10 @@ export interface StageResult {
   raw?: string;
   driver?: string;
   dryRun?: boolean;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    cost_usd?: number;
+  };
 }

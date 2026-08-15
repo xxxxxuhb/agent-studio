@@ -277,7 +277,7 @@ export class BridgesService implements OnModuleInit {
   }
 
   /**
-   * Fail fast before workspace ensure / Dify start when Bridge looks unreachable.
+   * Fail fast before workspace ensure / Studio start when Bridge looks unreachable.
    * Mid-run helpers may pass preferIdle=false so busy hosts still count as reachable.
    */
   async requireReachableBaseUrl(opts?: {
@@ -309,7 +309,7 @@ export class BridgesService implements OnModuleInit {
       );
     }
     if (!override && !registered && configured) {
-      // Settings-only fallback — probe health so we fail before Dify starts.
+      // Settings-only fallback — probe health so we fail before Studio starts.
       const ok = await this.probeBridgeHealth(studioBaseUrl);
       if (!ok) {
         throw new BadRequestException(

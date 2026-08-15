@@ -206,7 +206,6 @@ export async function prepareProjectRouting(
         status: i === 0 ? ("running" as const) : ("pending" as const),
         note,
         bridge_run_id: "",
-        dify_workflow_run_id: "",
       }));
 
   if (override && override.toLowerCase() !== "auto") {
@@ -229,7 +228,6 @@ export async function prepareProjectRouting(
             status: "running" as const,
             note: "manual agents_md_path",
             bridge_run_id: "",
-            dify_workflow_run_id: "",
           },
         ];
     return {

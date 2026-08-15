@@ -5,6 +5,9 @@ import { resolveExecutable, spawnCapture } from "./proc.js";
  * TraeCode CLI driver (`traecli`).
  * Docs: https://docs.trae.cn/cli_use-cases
  * Auth: TRAECLI_PERSONAL_ACCESS_TOKEN (trae-lt-…) or interactive `/login`.
+ *
+ * Usage: traecli does not expose structured token/cost in stdout today, so
+ * `AgentRunResult.usage` stays unset (Studio still records a zero-token event).
  */
 export class TraeAgentDriver implements AgentDriver {
   readonly id = "trae";

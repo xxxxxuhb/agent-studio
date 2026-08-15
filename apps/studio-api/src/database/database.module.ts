@@ -7,6 +7,9 @@ import { PipelineEntity } from "../pipelines/entities/pipeline.entity";
 import { ProjectEntity } from "../projects/entities/project.entity";
 import { RunLogEntryEntity } from "../run-logs/entities/run-log-entry.entity";
 import { RunLogMetaEntity } from "../run-logs/entities/run-log-meta.entity";
+import { RunArtifactEntity } from "../run-logs/entities/run-artifact.entity";
+import { UsageEventEntity } from "../usage/entities/usage-event.entity";
+import { AuditLogEntity } from "../audit/entities/audit-log.entity";
 import { TeamEntity } from "../teams/entities/team.entity";
 import { TeamMemberEntity } from "../teams/entities/team-member.entity";
 import { WorkOrderEntity } from "../work-orders/entities/work-order.entity";
@@ -33,6 +36,9 @@ function mysqlConfig() {
         WorkOrderEntity,
         RunLogMetaEntity,
         RunLogEntryEntity,
+        RunArtifactEntity,
+        UsageEventEntity,
+        AuditLogEntity,
         DigitalHumanEntity,
         PipelineEntity,
         BridgeEntity,

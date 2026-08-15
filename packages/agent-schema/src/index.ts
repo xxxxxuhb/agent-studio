@@ -1,9 +1,8 @@
 import { z } from "zod";
 import {
-  DigitalHumanDifyBindingSchema,
-  PipelineDifyBindingPublicSchema,
-  PipelineDifyBindingSchema,
-} from "./dify";
+  DigitalHumanBridgeBindingSchema,
+  bridgeBindingFromLegacy,
+} from "./bridge-binding";
 import { PipelineEdgeSchema, PipelineStepBranchSchema, PipelineStepParallelSchema } from "./pipeline-graph";
 import { PipelineTriggerSchema } from "./pipeline-triggers";
 import {
@@ -76,15 +75,25 @@ export const DigitalHumanSchema = z.object({
   avatar_label: z.string().optional().default(""),
   tags: z.array(z.string()).default([]),
   /**
-   * Legacy Bridge stage override (`dify.agent_id`). Prefer role / id mapping
-   * in `@agent-studio/orchestrator`; kept for existing MySQL rows.
+   * Optional Bridge stage override (`bridge.stage_id`). Prefer role / id mapping
+   * in `@agent-studio/orchestrator` when empty.
    */
-  dify: DigitalHumanDifyBindingSchema.optional().default({}),
+  bridge: DigitalHumanBridgeBindingSchema.optional().default({}),
   updated_at: z.string().optional(),
   created_at: z.string().optional(),
 });
 export type DigitalHuman = z.infer<typeof DigitalHumanSchema>;
 
+/** Accept legacy MySQL `dify` JSON while reading into `bridge`. */
+export function digitalHumanFromRow(row: {
+  bridge?: unknown;
+  dify?: unknown;
+  [k: string]: unknown;
+}): DigitalHuman {
+  const bridge = bridgeBindingFromLegacy(row.bridge ?? row.dify);
+  const { dify: _drop, bridge: _b, ...rest } = row;
+  return DigitalHumanSchema.parse({ ...rest, bridge });
+}
 export const DigitalHumanCreateSchema = DigitalHumanSchema.omit({
   created_at: true,
   updated_at: true,
@@ -209,16 +218,13 @@ export const PipelineSchema = z.object({
    * Automation: cron schedules and Forge inbound webhooks that create+start work orders.
    */
   triggers: z.array(PipelineTriggerSchema).optional().default([]),
-  /** Legacy Dify Workflow binding (ignored by Studio orchestrator). */
-  dify: PipelineDifyBindingSchema.optional().default({}),
   updated_at: z.string().optional(),
   created_at: z.string().optional(),
 });
 export type Pipeline = z.infer<typeof PipelineSchema>;
 
-export const PipelinePublicSchema = PipelineSchema.omit({ dify: true }).extend({
-  dify: PipelineDifyBindingPublicSchema.default({}),
-});
+/** Public pipeline shape (secrets live in team settings, not pipeline rows). */
+export const PipelinePublicSchema = PipelineSchema;
 export type PipelinePublic = z.infer<typeof PipelinePublicSchema>;
 
 export const PipelineCreateSchema = PipelineSchema.omit({
@@ -342,19 +348,23 @@ export const WorkOrderRunEventSchema = z.object({
     z.string().min(1),
   ),
   at: z.string(),
-  type: z.enum([
-    "run_started",
-    "dify_started",
-    "dify_status",
-    "bridge_stage",
-    "human_input_required",
-    "human_decision",
-    "step_mirrored",
-    "run_finished",
-    "sync_error",
-    "info",
-    "warning",
-  ]),
+  type: z.preprocess(
+    (v) => {
+      if (v === "dify_started" || v === "dify_status") return "info";
+      return v;
+    },
+    z.enum([
+      "run_started",
+      "bridge_stage",
+      "human_input_required",
+      "human_decision",
+      "step_mirrored",
+      "run_finished",
+      "sync_error",
+      "info",
+      "warning",
+    ]),
+  ),
   level: z.enum(["info", "warn", "error"]).default("info"),
   message: z.string(),
   step_id: z.string().optional(),
@@ -362,7 +372,6 @@ export const WorkOrderRunEventSchema = z.object({
   bridge_stage: z.string().optional(),
   bridge_run_id: z.string().optional(),
   dry_run: z.boolean().optional(),
-  dify_status: z.string().optional(),
   action: z.string().optional(),
   detail: z.record(z.unknown()).optional(),
 });
@@ -380,7 +389,6 @@ export const WorkOrderRepoTargetSchema = z.object({
     .default("pending"),
   started_at: z.string().optional(),
   finished_at: z.string().optional(),
-  dify_workflow_run_id: z.string().optional().default(""),
   bridge_run_id: z.string().optional().default(""),
   note: z.string().optional().default(""),
 });
@@ -392,6 +400,7 @@ export const WorkOrderRunSchema = z.object({
   pipeline_name: z.string(),
   executor: z.preprocess(
     (v) => {
+      // Legacy rows may still say "dify" / "local".
       if (v === "local" || v === "dify" || v == null || v === "") return "studio";
       return v;
     },
@@ -439,54 +448,6 @@ export const WorkOrderRunSchema = z.object({
       status: z.string().optional().default(""),
       error: z.string().nullable().optional(),
       last_synced_at: z.string().optional(),
-    })
-    .optional(),
-  dify: z
-    .object({
-      workflow_run_id: z.string().optional(),
-      task_id: z.string().optional(),
-      workflow_id: z.string().optional(),
-      status: z.string().optional(),
-      error: z.string().nullable().optional(),
-      outputs: z.record(z.unknown()).optional(),
-      inputs: z.record(z.unknown()).optional(),
-      total_steps: z.number().optional(),
-      elapsed_time: z.number().nullable().optional(),
-      last_synced_at: z.string().optional(),
-      raw_summary: z.string().optional(),
-      /** End-user id passed to Dify (must match for form submit / events) */
-      user: z.string().optional(),
-      /** From SSE human_input_required — required for Studio confirm */
-      form_token: z.string().nullable().optional(),
-      form_content: z.string().optional(),
-      form_node_title: z.string().optional(),
-      form_expiration_time: z.number().nullable().optional(),
-      form_actions: z
-        .array(
-          z.object({
-            id: z.string(),
-            title: z.string().optional(),
-            button_style: z.string().optional(),
-          }),
-        )
-        .optional(),
-      form_inputs: z
-        .array(
-          z.object({
-            type: z.string().optional(),
-            output_variable_name: z.string(),
-          }),
-        )
-        .optional(),
-      /** Which credentials were used for this run */
-      binding_source: z.enum(["pipeline", "team", "global"]).optional(),
-      api_base: z.string().optional(),
-      api_key_set: z.boolean().optional(),
-      app_id: z.string().optional(),
-      /** Last known Bridge run id (from HTTP stage response). */
-      bridge_run_id: z.string().optional(),
-      /** True when Bridge reports dry-run / missing CURSOR_API_KEY. */
-      bridge_dry_run: z.boolean().optional(),
     })
     .optional(),
   /**
@@ -675,13 +636,10 @@ export {
 } from "./mentions";
 
 export {
-  PipelineDifyBindingSchema,
-  PipelineDifyBindingPublicSchema,
-  DigitalHumanDifyBindingSchema,
-  type PipelineDifyBinding,
-  type PipelineDifyBindingPublic,
-  type DigitalHumanDifyBinding,
-} from "./dify";
+  DigitalHumanBridgeBindingSchema,
+  bridgeBindingFromLegacy,
+  type DigitalHumanBridgeBinding,
+} from "./bridge-binding";
 
 export {
   ProjectSchema,

@@ -33,7 +33,6 @@ export const DEFAULT_PIPELINES = [
       { id: "test", agent: "test", label: "测试" },
       { id: "ops", agent: "ops", label: "运维" },
     ]),
-    dify: {},
   },
   {
     id: "full-delivery-with-review",
@@ -60,7 +59,6 @@ export const DEFAULT_PIPELINES = [
       { id: "test", agent: "test", label: "测试" },
       { id: "ops", agent: "ops", label: "运维" },
     ]),
-    dify: {},
   },
 ];
 
@@ -105,7 +103,6 @@ export function composePipelineFromPrompt(prompt: string): PipelineCreate {
       description: `由自然语言生成：${text}`,
       source: { kind: "nl", nl_prompt: text, template_id: base.id },
       steps,
-      dify: base.dify || {},
     });
   }
 
@@ -127,6 +124,5 @@ export function composePipelineFromPrompt(prompt: string): PipelineCreate {
     description: `由自然语言生成：${text}`,
     source: { kind: "nl", nl_prompt: text, template_id: base.id },
     steps,
-    dify: base.dify || {},
   });
 }

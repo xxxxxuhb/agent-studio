@@ -342,7 +342,7 @@ function bodyEn(c: Ctx): string {
   }
 }
 
-/** Build readable stub artifacts until real Dify/Bridge agents are wired. */
+/** Build readable stub artifacts until real Bridge agents are wired. */
 export function buildAgentOutput(opts: {
   order: WorkOrder;
   step: WorkOrderRunStep;
@@ -366,8 +366,8 @@ export function buildAgentOutput(opts: {
   const body = language === "en" ? bodyEn(ctx) : bodyZh(ctx);
   const footer =
     language === "en"
-      ? "\n\n---\n> Studio simulated output. Replaced by real Agent results after Dify/Bridge is connected.\n"
-      : "\n\n---\n> 当前为 Studio 模拟产出，接入 Dify/Bridge 后将替换为真实 Agent 结果。\n";
+      ? "\n\n---\n> Studio simulated output. Replaced by real Agent results after Bridge is connected.\n"
+      : "\n\n---\n> 当前为 Studio 模拟产出，接入 Bridge 后将替换为真实 Agent 结果。\n";
 
   const committed =
     Boolean(opts.commitAppendix) && agent?.role === "review" && agent.permissions.may_commit;
@@ -387,7 +387,7 @@ export function buildAgentOutput(opts: {
   };
 }
 
-/** Instruction appended to Dify/Bridge requirements so agents honor the language. */
+/** Instruction appended to Bridge requirements so agents honor the language. */
 export function languageDirective(language: StudioLanguage): string {
   if (language === "en") {
     return [

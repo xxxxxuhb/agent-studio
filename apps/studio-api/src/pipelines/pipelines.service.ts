@@ -9,7 +9,6 @@ import { Repository } from "typeorm";
 import {
   PipelineComposeSchema,
   PipelineCreateSchema,
-  PipelineDifyBindingPublicSchema,
   PipelinePublicSchema,
   PipelineSchema,
   PipelineUpdateSchema,
@@ -25,6 +24,8 @@ import {
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
 import { StudioConfigService } from "../studio-config/studio-config.service";
 import { TeamsService } from "../teams/teams.service";
+import { AuthService } from "../auth/auth.service";
+import { AuditService } from "../audit/audit.service";
 import { bridgeAuthHeaders } from "../bridges/bridge-http";
 import { DEFAULT_PIPELINES, composePipelineFromPrompt } from "./defaults";
 import { PipelineEntity } from "./entities/pipeline.entity";
@@ -43,10 +44,21 @@ export class PipelinesService {
     private readonly humans: DigitalHumansService,
     private readonly studioConfig: StudioConfigService,
     private readonly teams: TeamsService,
+    private readonly auth: AuthService,
+    private readonly audit: AuditService,
   ) {}
 
   private nowIso() {
     return new Date().toISOString();
+  }
+
+  private async actorLabel(userId: string): Promise<string> {
+    const u = await this.auth.findById(userId);
+    return (u?.display_name || u?.username || userId || "").trim();
+  }
+
+  private scheduleAudit(input: Parameters<AuditService["record"]>[0]) {
+    void this.audit.record(input).catch(() => undefined);
   }
 
   private toPipeline(entity: PipelineEntity): Pipeline {
@@ -92,7 +104,6 @@ export class PipelinesService {
       entry: graph.entry,
       edges: graph.edges,
       triggers: Array.isArray(storedTriggers) ? storedTriggers : [],
-      dify: entity.dify || {},
       created_at: entity.created_at?.toISOString?.() || undefined,
       updated_at: entity.updated_at?.toISOString?.() || undefined,
     });
@@ -127,7 +138,6 @@ export class PipelinesService {
         triggers: pipeline.triggers || [],
       } as Record<string, unknown>,
       steps: pipeline.steps || [],
-      dify: (pipeline.dify || {}) as Record<string, unknown>,
       created_at: pipeline.created_at
         ? new Date(pipeline.created_at)
         : undefined,
@@ -269,20 +279,9 @@ export class PipelinesService {
     return pipeline;
   }
 
-  /** Redact api_key for API responses. */
+  /** Public API shape (PipelinePublicSchema === PipelineSchema). */
   toPublic(pipeline: Pipeline): PipelinePublic {
-    const dify = pipeline.dify || {};
-    return PipelinePublicSchema.parse({
-      ...pipeline,
-      dify: PipelineDifyBindingPublicSchema.parse({
-        enabled: Boolean(dify.enabled),
-        api_base: dify.api_base || "",
-        app_id: dify.app_id || "",
-        workflow_id: dify.workflow_id || "",
-        note: dify.note || "",
-        api_key_set: Boolean(dify.api_key?.trim()),
-      }),
-    });
+    return PipelinePublicSchema.parse(pipeline);
   }
 
   async create(input: PipelineCreate): Promise<PipelinePublic> {
@@ -318,21 +317,23 @@ export class PipelinesService {
       throw new BadRequestException("team_id is required");
     }
     await this.teams.requireWritableMember(teamId, userId);
-    return this.create({ ...body, team_id: teamId });
+    const created = await this.create({ ...body, team_id: teamId });
+    this.scheduleAudit({
+      team_id: teamId,
+      actor_user_id: userId,
+      actor_name: await this.actorLabel(userId),
+      action: "pipeline.create",
+      resource_type: "pipeline",
+      resource_id: created.id,
+      summary: `创建流水线 ${created.name || created.id}`,
+    });
+    return created;
   }
 
   async update(id: string, patch: PipelineUpdate): Promise<PipelinePublic> {
     const current = await this.get(id);
     try {
       const parsed = PipelineUpdateSchema.parse(patch);
-      const nextDify = {
-        ...(current.dify || {}),
-        ...(parsed.dify || {}),
-        api_key:
-          parsed.dify?.api_key === undefined || parsed.dify?.api_key === ""
-            ? current.dify?.api_key || ""
-            : parsed.dify.api_key,
-      };
       const merged = PipelineSchema.parse({
         ...current,
         ...parsed,
@@ -341,7 +342,6 @@ export class PipelinesService {
         source: { ...current.source, ...(parsed.source || {}) },
         defaults: { ...current.defaults, ...(parsed.defaults || {}) },
         steps: parsed.steps || current.steps,
-        dify: nextDify,
       });
       await this.assertAgentsExist(merged.steps);
       this.assertGraphValid(merged);
@@ -362,7 +362,18 @@ export class PipelinesService {
     const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
-    return this.update(id, patch);
+    const updated = await this.update(id, patch);
+    this.scheduleAudit({
+      team_id: current.team_id,
+      actor_user_id: userId,
+      actor_name: await this.actorLabel(userId),
+      action: "pipeline.update",
+      resource_type: "pipeline",
+      resource_id: id,
+      summary: `更新流水线 ${updated.name || id}`,
+      detail: { keys: Object.keys(patch || {}) },
+    });
+    return updated;
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<PipelinePublic> {
@@ -379,7 +390,17 @@ export class PipelinesService {
     const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
-    return this.setEnabled(id, enabled);
+    const updated = await this.setEnabled(id, enabled);
+    this.scheduleAudit({
+      team_id: current.team_id,
+      actor_user_id: userId,
+      actor_name: await this.actorLabel(userId),
+      action: enabled ? "pipeline.enable" : "pipeline.disable",
+      resource_type: "pipeline",
+      resource_id: id,
+      summary: `${enabled ? "启用" : "停用"}流水线 ${updated.name || id}`,
+    });
+    return updated;
   }
 
   async remove(id: string) {
@@ -393,7 +414,17 @@ export class PipelinesService {
     const current = await this.get(id);
     await this.assertReadable(userId, current);
     await this.teams.requireWritableMember(current.team_id, userId);
-    return this.remove(id);
+    const removed = await this.remove(id);
+    this.scheduleAudit({
+      team_id: current.team_id,
+      actor_user_id: userId,
+      actor_name: await this.actorLabel(userId),
+      action: "pipeline.delete",
+      resource_type: "pipeline",
+      resource_id: id,
+      summary: `删除流水线 ${current.name || id}`,
+    });
+    return removed;
   }
 
   async seedDefaults(teamId = "") {

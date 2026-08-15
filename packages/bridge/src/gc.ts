@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { RUN_ARTIFACT_DIR_NAMES } from "./artifacts.js";
 import { bridgeDataDir } from "./orchestrator.js";
 import type { RunRecord, RunStatus } from "./types.js";
 import { bridgeReposRoot } from "./workspaceEnsure.js";
@@ -27,7 +28,7 @@ export type GcOptions = {
   dryRun: boolean;
   /** Max age for `.agent-studio/prompt-*.txt` (default 24h). */
   promptMaxAgeMs: number;
-  /** Max age for terminal/orphan `docs/dify-runs/{runId}` dirs (default 14d). */
+  /** Max age for terminal/orphan `docs/runs|{dify-runs}/{runId}` dirs (default 14d). */
   artifactMaxAgeMs: number;
   /** Max age for terminal entries pruned from runs.json (default 30d). */
   runsJsonMaxAgeMs: number;
@@ -191,10 +192,10 @@ function removePath(target: string, dryRun: boolean): void {
 /**
  * Safe Bridge disk GC:
  * - prompt temps under `{repo}/.agent-studio/prompt-*`
- * - terminal / orphan `docs/dify-runs/{runId}` dirs past retention
+ * - terminal / orphan `docs/runs/{runId}` (and legacy `docs/dify-runs/{runId}`) dirs past retention
  * - optional prune of old terminal entries from runs.json
  *
- * Never deletes whole clones or non-`docs/dify-runs` source trees.
+ * Never deletes whole clones or non-`docs/(dify-)runs` source trees.
  */
 export function runBridgeGc(opts: GcOptions): GcResult {
   const now = opts.now ?? Date.now();
@@ -246,55 +247,57 @@ export function runBridgeGc(opts: GcOptions): GcResult {
       }
     }
 
-    const runsDir = path.join(repoPath, "docs", "dify-runs");
-    if (!fs.existsSync(runsDir)) continue;
-    let runDirs: fs.Dirent[] = [];
-    try {
-      runDirs = fs.readdirSync(runsDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
     const branch = currentBranch(repoPath);
-
-    for (const ent of runDirs) {
-      if (!ent.isDirectory()) continue;
-      const runId = ent.name;
-      const full = path.join(runsDir, runId);
-      if (protectedIds.has(runId)) {
-        skipped.push({ path: full, reason: "run_active_or_non_terminal" });
-        continue;
-      }
-      if (branch === `studio/dev/${runId}`) {
-        skipped.push({ path: full, reason: "checked_out_feature_branch" });
+    // Prefer docs/runs; also GC legacy docs/dify-runs.
+    for (const dirName of RUN_ARTIFACT_DIR_NAMES) {
+      const runsDir = path.join(repoPath, "docs", dirName);
+      if (!fs.existsSync(runsDir)) continue;
+      let runDirs: fs.Dirent[] = [];
+      try {
+        runDirs = fs.readdirSync(runsDir, { withFileTypes: true });
+      } catch {
         continue;
       }
 
-      const record = runs[runId] as RunRecord | undefined;
-      const age = now - mtimeMs(full);
-      const terminal = record ? isTerminalStatus(record.status) : false;
-      const orphan = !record;
+      for (const ent of runDirs) {
+        if (!ent.isDirectory()) continue;
+        const runId = ent.name;
+        const full = path.join(runsDir, runId);
+        if (protectedIds.has(runId)) {
+          skipped.push({ path: full, reason: "run_active_or_non_terminal" });
+          continue;
+        }
+        if (branch === `studio/dev/${runId}`) {
+          skipped.push({ path: full, reason: "checked_out_feature_branch" });
+          continue;
+        }
 
-      if (!terminal && !orphan) {
-        skipped.push({ path: full, reason: "unknown_non_terminal" });
-        continue;
-      }
-      if (age < opts.artifactMaxAgeMs) {
-        skipped.push({
+        const record = runs[runId] as RunRecord | undefined;
+        const age = now - mtimeMs(full);
+        const terminal = record ? isTerminalStatus(record.status) : false;
+        const orphan = !record;
+
+        if (!terminal && !orphan) {
+          skipped.push({ path: full, reason: "unknown_non_terminal" });
+          continue;
+        }
+        if (age < opts.artifactMaxAgeMs) {
+          skipped.push({
+            path: full,
+            reason: orphan ? "orphan_too_new" : "artifact_too_new",
+          });
+          continue;
+        }
+
+        const bytes = dirBytes(full);
+        deleted.push({
           path: full,
-          reason: orphan ? "orphan_too_new" : "artifact_too_new",
+          kind: "artifact_dir",
+          bytes,
+          runId,
         });
-        continue;
+        removePath(full, opts.dryRun);
       }
-
-      const bytes = dirBytes(full);
-      deleted.push({
-        path: full,
-        kind: "artifact_dir",
-        bytes,
-        runId,
-      });
-      removePath(full, opts.dryRun);
     }
   }
 

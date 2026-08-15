@@ -12,8 +12,6 @@ export type RunLogTraceStep = {
 
 const KEY_EVENT_TYPES = new Set([
   "run_started",
-  "dify_started",
-  "dify_status",
   "bridge_stage",
   "human_input_required",
   "human_decision",
@@ -21,7 +19,7 @@ const KEY_EVENT_TYPES = new Set([
   "sync_error",
 ]);
 
-/** True when `q` looks like a Studio / Dify / Bridge / work-order id (not free text). */
+/** True when `q` looks like a Studio / Bridge / work-order id (not free text). */
 export function looksLikeCorrelationId(q: string): boolean {
   const s = q.trim();
   if (s.length < 4 || s.length > 96) return false;

@@ -3,6 +3,10 @@
  * Bridge orchestrates stages; drivers own how an LLM/agent actually runs.
  */
 
+import type { AgentUsageMetrics } from "./usage.js";
+
+export type { AgentUsageMetrics } from "./usage.js";
+
 export type AgentDriverId =
   | "auto"
   | "cursor"
@@ -31,6 +35,8 @@ export type AgentRunResult = {
   dryRun?: boolean;
   /** Provider-specific run / agent id when available */
   providerRunId?: string;
+  /** Token/cost when the driver can report it (Cursor / Qoder today). */
+  usage?: AgentUsageMetrics;
 };
 
 export interface AgentDriver {

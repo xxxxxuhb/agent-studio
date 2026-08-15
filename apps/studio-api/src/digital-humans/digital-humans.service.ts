@@ -10,6 +10,8 @@ import {
   DigitalHumanCreateSchema,
   DigitalHumanSchema,
   DigitalHumanUpdateSchema,
+  bridgeBindingFromLegacy,
+  digitalHumanFromRow,
   type DigitalHuman,
   type DigitalHumanCreate,
   type DigitalHumanUpdate,
@@ -31,7 +33,7 @@ export class DigitalHumansService {
   }
 
   private toDigitalHuman(entity: DigitalHumanEntity): DigitalHuman {
-    return DigitalHumanSchema.parse({
+    return digitalHumanFromRow({
       id: entity.id,
       team_id: entity.team_id || "",
       name: entity.name,
@@ -47,7 +49,7 @@ export class DigitalHumansService {
       enabled: entity.enabled !== false,
       avatar_label: entity.avatar_label || "",
       tags: entity.tags || [],
-      dify: entity.dify || {},
+      bridge: entity.bridge || {},
       created_at: entity.created_at?.toISOString?.() || undefined,
       updated_at: entity.updated_at?.toISOString?.() || undefined,
     });
@@ -70,7 +72,7 @@ export class DigitalHumansService {
       enabled: agent.enabled !== false,
       avatar_label: agent.avatar_label || "",
       tags: agent.tags || [],
-      dify: (agent.dify || {}) as Record<string, unknown>,
+      bridge: bridgeBindingFromLegacy(agent.bridge) as Record<string, unknown>,
       created_at: agent.created_at ? new Date(agent.created_at) : undefined,
       updated_at: agent.updated_at ? new Date(agent.updated_at) : undefined,
     };

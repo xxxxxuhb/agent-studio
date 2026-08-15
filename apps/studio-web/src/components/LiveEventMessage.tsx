@@ -139,7 +139,10 @@ export function ArtifactDocModal({ open, path, runId, onClose }: ModalProps) {
       })
       .catch((err) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
+        const raw = err instanceof Error ? err.message : String(err);
+        const msg = /artifact not found/i.test(raw)
+          ? `${name} 本次 run 未落盘（Bridge 与入库均无）。Agent 若未写出该文件，预览会失败；请在「产物」里打开已存在的文件。`
+          : raw;
         setError(msg);
         message.error(msg);
       })

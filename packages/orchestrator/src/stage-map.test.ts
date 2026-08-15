@@ -8,10 +8,20 @@ describe("bridgeStageForAgent", () => {
     assert.equal(bridgeStageForAgent(null, "plan"), "plan");
   });
 
-  it("prefers dify.agent_id", () => {
+  it("prefers bridge.stage_id", () => {
     assert.equal(
-      bridgeStageForAgent({ dify: { agent_id: "custom_stage" } }, "fullstack_dev"),
+      bridgeStageForAgent(
+        { bridge: { stage_id: "custom_stage" } },
+        "fullstack_dev",
+      ),
       "custom_stage",
+    );
+  });
+
+  it("falls back to legacy dify.agent_id", () => {
+    assert.equal(
+      bridgeStageForAgent({ dify: { agent_id: "legacy_stage" } }, "fullstack_dev"),
+      "legacy_stage",
     );
   });
 

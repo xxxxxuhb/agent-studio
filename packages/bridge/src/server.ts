@@ -36,7 +36,7 @@ export type StartBridgeOptions = {
   studioUrl?: string;
   /** Shared token for register/heartbeat */
   studioToken?: string;
-  /** URL Studio/Dify should call (defaults to http://host:port when host is public) */
+  /** URL Studio should call (defaults to http://host:port when host is public) */
   publicUrl?: string;
   /** Open browser Cursor.auth.login when no CURSOR_API_KEY */
   login?: boolean;
@@ -378,7 +378,7 @@ export async function startBridge(
   };
 
   console.log(`agent-studio-bridge listening on http://${host}:${port}`);
-  console.log(`public url (for Studio/Dify): ${publicUrl}`);
+  console.log(`public url (for Studio): ${publicUrl}`);
   console.log(
     `agent driver: ${driver.id} (${driver.label})`,
   );

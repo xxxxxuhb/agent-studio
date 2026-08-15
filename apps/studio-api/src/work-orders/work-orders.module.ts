@@ -7,6 +7,8 @@ import { ProjectsModule } from "../projects/projects.module";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { RealtimeModule } from "../realtime/realtime.module";
 import { RunLogsModule } from "../run-logs/run-logs.module";
+import { UsageModule } from "../usage/usage.module";
+import { AuditModule } from "../audit/audit.module";
 import { StudioConfigModule } from "../studio-config/studio-config.module";
 import { TeamsModule } from "../teams/teams.module";
 import { WorkOrderEntity } from "./entities/work-order.entity";
@@ -23,6 +25,8 @@ import { WorkOrderStudioRunner } from "./work-order-studio-runner.service";
     StudioConfigModule,
     ProjectsModule,
     RunLogsModule,
+    UsageModule,
+    AuditModule,
     RealtimeModule,
     BridgesModule,
   ],

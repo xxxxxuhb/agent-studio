@@ -28,7 +28,6 @@ const SOURCE_COLOR: Record<RunLogSource, string> = {
   pipeline: "blue",
   agent: "purple",
   bridge: "green",
-  dify: "cyan",
   manager: "geekblue",
   human: "orange",
 };
@@ -38,7 +37,6 @@ const SOURCE_LABEL: Record<RunLogSource, string> = {
   pipeline: "流水线",
   agent: "Agent",
   bridge: "Bridge",
-  dify: "编排",
   manager: "总管",
   human: "人工",
 };
@@ -235,17 +233,9 @@ export function RunLogsPage() {
                             {item.pipeline_name || item.pipeline_id || "-"} ·{" "}
                             {item.entry_count} 条
                           </span>
-                          {item.dify_workflow_run_id || item.bridge_run_id ? (
+                          {item.bridge_run_id ? (
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {item.dify_workflow_run_id
-                                ? `Run ${item.dify_workflow_run_id.slice(0, 10)}…`
-                                : ""}
-                              {item.dify_workflow_run_id && item.bridge_run_id
-                                ? " · "
-                                : ""}
-                              {item.bridge_run_id
-                                ? `Bridge ${item.bridge_run_id}`
-                                : ""}
+                              {`Bridge ${item.bridge_run_id}`}
                               {item.bridge_stage ? ` / ${item.bridge_stage}` : ""}
                             </Typography.Text>
                           ) : null}
@@ -345,19 +335,6 @@ export function RunLogsPage() {
                         {selected.run_id}
                       </Typography.Text>
                     </Typography.Text>
-                    {selected.dify_workflow_run_id ? (
-                      <Typography.Text>
-                        Legacy{" "}
-                        <Typography.Text
-                          code
-                          copyable
-                          onClick={() => setQ(selected.dify_workflow_run_id)}
-                          style={{ cursor: "pointer" }}
-                        >
-                          {selected.dify_workflow_run_id}
-                        </Typography.Text>
-                      </Typography.Text>
-                    ) : null}
                     {selected.bridge_run_id ? (
                       <Typography.Text>
                         Bridge{" "}

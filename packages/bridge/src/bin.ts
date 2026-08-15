@@ -49,7 +49,7 @@ program
   .option("-p, --port <n>", "Listen port", (v) => Number(v), 8787)
   .option("--host <addr>", "Bind host", "0.0.0.0")
   .option("-n, --name <label>", "Executor display name")
-  .option("--public-url <url>", "URL Studio/Dify should call")
+  .option("--public-url <url>", "URL Studio should call")
   .option("--studio-url <url>", "Studio API root (e.g. http://127.0.0.1:8790)")
   .option("-t, --token <secret>", "Shared register token (STUDIO_BRIDGE_TOKEN)")
   .option(
@@ -88,7 +88,7 @@ program
 program
   .command("gc")
   .description(
-    "Clean stale Bridge prompt temps + terminal docs/dify-runs artifacts (safe; never deletes whole clones)",
+    "Clean stale Bridge prompt temps + terminal docs/runs artifacts (safe; never deletes whole clones)",
   )
   .option("--apply", "Actually delete (default is dry-run)", false)
   .option("--dry-run", "Force dry-run even if BRIDGE_GC_DRY_RUN=false", false)
@@ -99,7 +99,7 @@ program
   )
   .option(
     "--artifact-days <n>",
-    "Max age for terminal/orphan docs/dify-runs/{runId}",
+    "Max age for terminal/orphan docs/runs/{runId} (also legacy docs/dify-runs)",
     (v) => Number(v),
   )
   .option(

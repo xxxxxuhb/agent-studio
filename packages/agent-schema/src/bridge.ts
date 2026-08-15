@@ -13,7 +13,7 @@ export const BridgeExecutorSchema = z.object({
   /** Owning team; empty = legacy / unassigned (bootstrap stamps default). */
   team_id: z.string().optional().default(""),
   name: z.string().min(1),
-  /** Base URL Studio/Dify should call, e.g. http://192.168.1.8:8787 */
+  /** Base URL Studio should call, e.g. http://192.168.1.8:8787 */
   base_url: z.string().min(1),
   /** Active agent driver on this executor: cursor | trae | qoder | … */
   driver: z.string().default("auto"),
@@ -74,7 +74,7 @@ export const BridgePrepareSchema = z.object({
   team_id: z.string().min(1),
   /** Agent driver: auto | cursor | trae | qoder | openai | … */
   driver: z.string().min(1).default("cursor"),
-  /** URL Studio/Dify will call on the executor machine */
+  /** URL Studio will call on the executor machine */
   base_url: z.string().min(1),
   /** Studio API root the executor should connect to */
   studio_url: z.string().min(1),

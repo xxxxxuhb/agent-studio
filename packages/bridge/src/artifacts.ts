@@ -36,7 +36,14 @@ function assertSafeArtifactName(name: string): string {
   return raw;
 }
 
-/** Allowed root: registered runs_dir, else repo/docs/dify-runs/{runId}. */
+/** On-disk parent dir names under `docs/` (new first, then legacy). */
+export const RUN_ARTIFACT_DIR_NAMES = ["runs", "dify-runs"] as const;
+
+/**
+ * Allowed root: registered runs_dir, else prefer `docs/runs/{runId}`,
+ * falling back to legacy `docs/dify-runs/{runId}` when that exists.
+ * New writes without an explicit runs_dir use `docs/runs/{runId}`.
+ */
 export function artifactRootForRun(run: RunRecord): string {
   const fromMap = (run.artifacts?.runs_dir || "").trim();
   if (fromMap) return path.resolve(fromMap);
@@ -44,7 +51,11 @@ export function artifactRootForRun(run: RunRecord): string {
   if (!repo) {
     throw new Error(`run ${run.id} has no repoPath / runs_dir for artifacts`);
   }
-  return path.resolve(repo, "docs", "dify-runs", run.id);
+  const preferred = path.resolve(repo, "docs", "runs", run.id);
+  if (fs.existsSync(preferred)) return preferred;
+  const legacy = path.resolve(repo, "docs", "dify-runs", run.id);
+  if (fs.existsSync(legacy)) return legacy;
+  return preferred;
 }
 
 function roleForPath(run: RunRecord, absFile: string): string | undefined {

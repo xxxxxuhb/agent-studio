@@ -36,14 +36,19 @@ describe("runBridgeGc", () => {
     fs.writeFileSync(newPrompt, "new");
     touchOld(oldPrompt, 48 * 3600_000);
 
-    const oldRun = path.join(repoPath, "docs", "dify-runs", "oldrun");
-    const liveRun = path.join(repoPath, "docs", "dify-runs", "liverun");
+    const oldRun = path.join(repoPath, "docs", "runs", "oldrun");
+    const liveRun = path.join(repoPath, "docs", "runs", "liverun");
+    const legacyOrphan = path.join(repoPath, "docs", "dify-runs", "legorphan");
     fs.mkdirSync(oldRun, { recursive: true });
     fs.mkdirSync(liveRun, { recursive: true });
+    fs.mkdirSync(legacyOrphan, { recursive: true });
     fs.writeFileSync(path.join(oldRun, "note.md"), "done");
     fs.writeFileSync(path.join(liveRun, "note.md"), "live");
+    fs.writeFileSync(path.join(legacyOrphan, "note.md"), "legacy");
     touchOld(oldRun, 20 * 86_400_000);
     touchOld(path.join(oldRun, "note.md"), 20 * 86_400_000);
+    touchOld(legacyOrphan, 20 * 86_400_000);
+    touchOld(path.join(legacyOrphan, "note.md"), 20 * 86_400_000);
 
     fs.mkdirSync(dataDir, { recursive: true });
     fs.writeFileSync(
@@ -99,9 +104,15 @@ describe("runBridgeGc", () => {
     assert.equal(result.dryRun, true);
     assert.ok(result.deleted.some((d) => d.kind === "prompt"));
     assert.ok(result.deleted.some((d) => d.kind === "artifact_dir" && d.runId === "oldrun"));
+    assert.ok(
+      result.deleted.some((d) => d.kind === "artifact_dir" && d.runId === "legorphan"),
+    );
     assert.ok(result.prunedRunIds.includes("oldrun"));
     assert.ok(
-      fs.existsSync(path.join(repoPath, "docs", "dify-runs", "oldrun")),
+      fs.existsSync(path.join(repoPath, "docs", "runs", "oldrun")),
+    );
+    assert.ok(
+      fs.existsSync(path.join(repoPath, "docs", "dify-runs", "legorphan")),
     );
     assert.ok(
       fs.existsSync(path.join(repoPath, ".agent-studio", "prompt-old.txt")),
@@ -127,11 +138,15 @@ describe("runBridgeGc", () => {
       true,
     );
     assert.equal(
-      fs.existsSync(path.join(repoPath, "docs", "dify-runs", "oldrun")),
+      fs.existsSync(path.join(repoPath, "docs", "runs", "oldrun")),
       false,
     );
     assert.equal(
-      fs.existsSync(path.join(repoPath, "docs", "dify-runs", "liverun")),
+      fs.existsSync(path.join(repoPath, "docs", "dify-runs", "legorphan")),
+      false,
+    );
+    assert.equal(
+      fs.existsSync(path.join(repoPath, "docs", "runs", "liverun")),
       true,
     );
     const runs = JSON.parse(

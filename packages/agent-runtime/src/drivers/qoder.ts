@@ -1,4 +1,5 @@
 import type { AgentDriver, AgentRunRequest, AgentRunResult } from "../types.js";
+import { usageFromQoderResult } from "../usage.js";
 import { resolveExecutable } from "./proc.js";
 
 function qoderPat(): string {
@@ -57,6 +58,7 @@ export class QoderAgentDriver implements AgentDriver {
     const texts: string[] = [];
     let sessionId = "";
     let resultText = "";
+    let usage = usageFromQoderResult({});
 
     try {
       const stream = sdk.query({
@@ -80,10 +82,19 @@ export class QoderAgentDriver implements AgentDriver {
           session_id?: string;
           result?: string;
           errors?: string[];
+          total_cost_usd?: number;
+          usage?: {
+            input_tokens?: number;
+            output_tokens?: number;
+          };
           message?: { content?: unknown };
         };
         if (msg.session_id) sessionId = msg.session_id;
         if (msg.type === "result") {
+          usage = usageFromQoderResult({
+            usage: msg.usage,
+            total_cost_usd: msg.total_cost_usd,
+          });
           if (msg.subtype === "success" && typeof msg.result === "string") {
             resultText = msg.result;
           } else if (msg.errors?.length) {
@@ -121,6 +132,7 @@ export class QoderAgentDriver implements AgentDriver {
       driver: this.id,
       dryRun: false,
       providerRunId: sessionId || undefined,
+      usage,
     };
   }
 }

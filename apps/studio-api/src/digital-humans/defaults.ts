@@ -31,7 +31,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "需",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "requirement_clarify",
@@ -70,7 +70,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "澄",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "requirement",
@@ -110,7 +110,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "稿",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "plan",
@@ -140,7 +140,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "计",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "fullstack_dev",
@@ -186,7 +186,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "开",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "code_review",
@@ -233,7 +233,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "评",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "test",
@@ -264,7 +264,7 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "测",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
   {
     id: "ops",
@@ -299,6 +299,6 @@ export const DEFAULT_DIGITAL_HUMANS = [
     enabled: true,
     avatar_label: "运",
     tags: ["core"],
-    dify: {},
+    bridge: {},
   },
 ];

@@ -28,7 +28,7 @@ export type StudioConfigPublic = z.infer<typeof StudioConfigPublicSchema>;
 
 /**
  * Per-team overlay (file: data/team-secrets/{teamId}.yaml, mode 0600).
- * Legacy Dify keys in old files are ignored via passthrough + selective read.
+ * Legacy unused keys in old files are ignored via passthrough + selective read.
  */
 export const TeamSecretsSchema = z
   .object({

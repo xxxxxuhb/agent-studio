@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, Layout, Menu, Space, Typography, theme } from "antd";
 import {
+  AuditOutlined,
   ApartmentOutlined,
   CloudServerOutlined,
   FileTextOutlined,
@@ -29,6 +30,7 @@ import { RunLogsPage } from "./pages/RunLogsPage";
 import { SelectTeamPage } from "./pages/SelectTeamPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TeamsPage } from "./pages/TeamsPage";
+import { UsageAuditPage } from "./pages/UsageAuditPage";
 import { WorkOrdersPage } from "./pages/WorkOrdersPage";
 import {
   clearSession,
@@ -83,6 +85,11 @@ const PAGE_META: Record<
     icon: <ApartmentOutlined />,
     hint: "步骤编排",
   },
+  "/usage": {
+    label: "用量与审计",
+    icon: <AuditOutlined />,
+    hint: "Token / 成本与操作审计",
+  },
   "/settings": {
     label: "设置",
     icon: <SettingOutlined />,
@@ -126,6 +133,7 @@ function Shell() {
       { key: "/logs", icon: <ProfileOutlined />, label: "日志" },
       { key: "/digital-humans", icon: <RobotOutlined />, label: "数字人" },
       { key: "/pipelines", icon: <ApartmentOutlined />, label: "流水线" },
+      { key: "/usage", icon: <AuditOutlined />, label: "用量与审计" },
       { key: "/settings", icon: <SettingOutlined />, label: "设置" },
     ];
     if (user?.is_admin) {
@@ -244,6 +252,7 @@ function Shell() {
               <Route path="/logs/:runId" element={<RunLogsPage />} />
               <Route path="/digital-humans" element={<DigitalHumansPage />} />
               <Route path="/pipelines" element={<PipelinesPage />} />
+              <Route path="/usage" element={<UsageAuditPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </div>

@@ -45,6 +45,8 @@ export const runLogsApi = {
       bridge_base_url: string;
       root: string;
       items: RunArtifactListItem[];
+      stored_count?: number;
+      hint?: string;
     }>(`/run-logs/${encodeURIComponent(runId)}/artifacts`);
   },
   readArtifact(runId: string, name: string) {
@@ -55,6 +57,7 @@ export const runLogsApi = {
       content_type: string;
       content: string;
       role?: string;
+      source?: "bridge" | "stored";
     }>(
       `/run-logs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(name)}`,
     );
@@ -66,4 +69,5 @@ export type RunArtifactListItem = {
   bytes: number;
   updated_at: string;
   role?: string;
+  source?: "bridge" | "stored";
 };

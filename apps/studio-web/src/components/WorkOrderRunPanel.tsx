@@ -60,83 +60,12 @@ type Props = {
   onOrderUpdate?: (order: WorkOrder) => void;
 };
 
-type RunAlertInfo = {
-  type: "success" | "info" | "warning" | "error";
-  message: string;
-  hint: string;
-  offerRestart?: boolean;
-};
-
 function formatEventTime(at: string): string {
   try {
     return new Date(at).toLocaleTimeString();
   } catch {
     return at;
   }
-}
-
-/** Kept for leftover non-studio / legacy run.dify payloads. */
-export function describeLegacyRunAlert(
-  order: WorkOrder,
-  dify: NonNullable<NonNullable<WorkOrder["run"]>["dify"]>,
-): RunAlertInfo {
-  const err = (dify.error || "").trim();
-  const summary = (dify.raw_summary || "").trim();
-  const softHeld = order.status === "running" && Boolean(err);
-  const syncFailed =
-    softHeld &&
-    (err.startsWith("同步失败:") ||
-      /拉取.*状态失败|get run failed|get run/i.test(summary || err));
-  const transientBridge =
-    /\b(502|503|504)\b|bridge_busy|econnrefused|fetch failed|不可达|掉线|瞬时/i.test(
-      `${err}\n${summary}`,
-    );
-
-  if (syncFailed) {
-    return {
-      type: "warning",
-      message: "运行状态同步失败（可重试）",
-      hint: "拉取运行状态失败；可点「重新执行」开新一轮。",
-      offerRestart: true,
-    };
-  }
-  if (dify.status === "failed" || order.status === "failed") {
-    return {
-      type: transientBridge ? "warning" : "error",
-      message: transientBridge
-        ? "编排失败（疑似 Bridge/网络瞬时）"
-        : "编排失败",
-      hint: transientBridge
-        ? "常见原因：Bridge 未启动、掉线或返回 503。修好后可先「从失败阶段续跑」；若 Bridge run 已失效再用「重新执行」。"
-        : err
-          ? "本次运行已结束。可「从失败阶段续跑」，或「重新执行」开新一轮。"
-          : "本次运行已结束。可「从失败阶段续跑」，或「重新执行」。",
-      offerRestart: true,
-    };
-  }
-  if (dify.status === "paused" || order.status === "pending_approval") {
-    const recoverHint =
-      !dify.form_token &&
-      /form_token|Human Input|Web App/i.test(dify.raw_summary || "")
-        ? dify.raw_summary
-        : null;
-    return {
-      type: "warning",
-      message: `等待确认 · ${dify.status || "paused"}`,
-      hint: order.run?.auto_approve
-        ? "已开自动确认：Studio 将代为通过门禁"
-        : dify.form_token
-          ? "人工确认可在下方 Studio 完成"
-          : recoverHint || "正在同步门禁表单；请检查 Bridge",
-    };
-  }
-  return {
-    type: "info",
-    message: `运行状态 · ${dify.status || "unknown"}`,
-    hint: dify.form_token
-      ? "人工确认可在下方 Studio 完成"
-      : "正在同步门禁表单",
-  };
 }
 
 function bannerTitle(
@@ -194,7 +123,6 @@ function WorkOrderRunPanelBody({
   const [docPath, setDocPath] = useState<string | null>(null);
   const run = order.run!;
 
-  const isStudio = run.executor === "studio" || !run.executor;
   const studio = run.studio;
   const currentStep = run.steps[run.current_step_index] as
     | WorkOrderRunStep
@@ -203,8 +131,7 @@ function WorkOrderRunPanelBody({
   const events = run.events || [];
   const latestEvent = events.length ? events[events.length - 1] : undefined;
   const recentEvents = [...events].reverse().slice(0, 40);
-  const bridgeRunId =
-    studio?.bridge_run_id || run.dify?.bridge_run_id || undefined;
+  const bridgeRunId = studio?.bridge_run_id || undefined;
   const canResume =
     order.status === "failed" && Boolean(bridgeRunId) && Boolean(onResume);
 
@@ -225,7 +152,6 @@ function WorkOrderRunPanelBody({
   const stage = (studio?.current_stage || "").trim();
   const dryRun =
     Boolean(studio?.dry_run) ||
-    Boolean(run.dify?.bridge_dry_run) ||
     events.some((e) => e.dry_run) ||
     run.steps.some((s) =>
       /\[dry-run\]|CURSOR_API_KEY missing/i.test(s.output || ""),
@@ -366,22 +292,6 @@ function WorkOrderRunPanelBody({
                   检索
                 </Button>
               </Link>
-            </>
-          ) : null}
-          {!isStudio && run.dify?.workflow_run_id ? (
-            <>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Legacy run
-              </Typography.Text>
-              <Typography.Text
-                code
-                copyable={{ text: run.dify.workflow_run_id }}
-                style={{ fontSize: 12 }}
-              >
-                {run.dify.workflow_run_id.length > 14
-                  ? `${run.dify.workflow_run_id.slice(0, 12)}…`
-                  : run.dify.workflow_run_id}
-              </Typography.Text>
             </>
           ) : null}
         </Space>
@@ -773,14 +683,11 @@ function ApprovalCard({
 }) {
   const run = order.run!;
   const studio = run.studio;
-  const dify = run.dify;
-  const isStudio = run.executor === "studio" || !run.executor;
-  const canDecide = isStudio || Boolean(dify?.form_token);
+  const canDecide = true;
   const autoApprove = Boolean(run.auto_approve);
   const oqSources = [
     currentStep.output,
     studio?.last_summary,
-    dify?.form_content,
     ...run.steps.map((s) => s.output),
   ];
   const showChecklist = hasOpenQuestions(oqSources);
@@ -794,7 +701,7 @@ function ApprovalCard({
           <span>
             {studio?.current_stage
               ? `人工确认 · ${studio.current_stage}`
-              : dify?.form_node_title || "Studio 人工确认"}
+              : "Studio 人工确认"}
           </span>
           <Tag color={autoApprove ? "success" : "warning"}>
             自动确认：{autoApprove ? "已开启" : "未开启"}
@@ -825,8 +732,8 @@ function ApprovalCard({
         />
       ) : null}
 
-      {!showChecklist && (studio?.last_summary || dify?.form_content) ? (
-        <MarkdownBody content={studio?.last_summary || dify?.form_content || ""} />
+      {!showChecklist && studio?.last_summary ? (
+        <MarkdownBody content={studio.last_summary} />
       ) : null}
 
       {!showChecklist ? (
@@ -855,48 +762,22 @@ function ApprovalCard({
           />
 
           <Space wrap>
-            {!isStudio && dify?.form_actions?.length ? (
-              dify.form_actions.map((a) => {
-                const rejectish = /reject|驳回|拒绝/i.test(a.id + (a.title || ""));
-                return (
-                  <Button
-                    key={a.id}
-                    type={
-                      a.button_style === "primary" ||
-                      /approv|通过|同意/i.test(a.id + (a.title || ""))
-                        ? "primary"
-                        : "default"
-                    }
-                    danger={rejectish}
-                    disabled={!canDecide}
-                    onClick={() =>
-                      onDecide(rejectish ? "reject" : "approve", a.id)
-                    }
-                  >
-                    {a.title || a.id}
-                  </Button>
-                );
-              })
-            ) : (
-              <>
-                <Button
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  disabled={!canDecide}
-                  onClick={() => onDecide("approve")}
-                >
-                  通过并继续
-                </Button>
-                <Button
-                  danger
-                  icon={<CloseOutlined />}
-                  disabled={!canDecide}
-                  onClick={() => onDecide("reject")}
-                >
-                  驳回
-                </Button>
-              </>
-            )}
+            <Button
+              type="primary"
+              icon={<CheckOutlined />}
+              disabled={!canDecide}
+              onClick={() => onDecide("approve")}
+            >
+              通过并继续
+            </Button>
+            <Button
+              danger
+              icon={<CloseOutlined />}
+              disabled={!canDecide}
+              onClick={() => onDecide("reject")}
+            >
+              驳回
+            </Button>
           </Space>
         </>
       ) : null}

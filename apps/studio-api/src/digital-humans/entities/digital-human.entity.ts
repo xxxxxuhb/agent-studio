@@ -56,7 +56,7 @@ export class DigitalHumanEntity {
   tags!: string[];
 
   @Column({ type: "json" })
-  dify!: Record<string, unknown>;
+  bridge!: Record<string, unknown>;
 
   @CreateDateColumn({ type: "datetime" })
   created_at!: Date;

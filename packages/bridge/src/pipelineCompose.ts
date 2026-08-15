@@ -32,7 +32,6 @@ export type PipelineComposeDraft = {
     reject_goto?: string;
     inputs_from?: string[];
   }>;
-  dify?: Record<string, unknown>;
 };
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
@@ -105,7 +104,6 @@ function buildPrompt(userPrompt: string, agents: ComposeAgentInfo[]): string {
             inputs_from: [],
           },
         ],
-        dify: {},
       },
       null,
       2,
@@ -185,7 +183,6 @@ function normalizeDraft(
       on_reject: "end",
     },
     steps: normalized,
-    dify: {},
   };
 }
 

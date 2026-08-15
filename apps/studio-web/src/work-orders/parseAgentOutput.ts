@@ -1,8 +1,8 @@
 /**
- * Normalize agent / Bridge / Dify step outputs for UI rendering.
+ * Normalize agent / Bridge step outputs for UI rendering.
  *
  * Real payloads are often nested:
- *   "# Dify Outputs\n```json\n{ \"result\": \"{ \\\"summary\\\": \\\"...\\\\n\\\" }\" }\n```"
+ *   "```json\n{ \"result\": \"{ \\\"summary\\\": \\\"...\\\\n\\\" }\" }\n```"
  * i.e. Markdown fence → JSON → stringified JSON → Markdown summary.
  *
  * IMPORTANT: never unescape \\n / \\" on the whole blob before JSON.parse —
@@ -242,7 +242,7 @@ function fromJsonish(payload: string, preface = ""): ParsedAgentOutput | undefin
   const structured = structuredFromObject(obj);
   if (!structured || structured.kind !== "structured") return undefined;
 
-  const cleanPreface = preface.replace(/^#\s*Dify Outputs\s*/i, "").trim();
+  const cleanPreface = preface.trim();
   if (cleanPreface && looksLikeMarkdown(cleanPreface) && structured.body) {
     return {
       ...structured,

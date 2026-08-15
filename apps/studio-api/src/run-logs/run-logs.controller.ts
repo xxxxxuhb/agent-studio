@@ -35,7 +35,7 @@ export class RunLogsController {
     });
   }
 
-  /** Paste Studio / Dify / Bridge / work-order id → one run (exact preferred). */
+  /** Paste Studio / Bridge / work-order id → one run (exact preferred). */
   @Get("lookup")
   async lookup(
     @CurrentUser() user: RequestUser,

@@ -17,7 +17,6 @@ export class StudioConfigService implements OnModuleInit {
   private filePath = "";
   private teamDir = "";
   private teamSecretsDir = "";
-  private legacyDifyConfigPath = "";
   private config: StudioConfig = StudioConfigSchema.parse({});
 
   onModuleInit() {
@@ -33,15 +32,10 @@ export class StudioConfigService implements OnModuleInit {
       process.env.STUDIO_TEAM_SECRETS_DIR ||
         path.join(process.cwd(), "data", "team-secrets"),
     );
-    this.legacyDifyConfigPath = path.resolve(
-      process.env.STUDIO_DIFY_CONFIG ||
-        path.join(process.cwd(), "data", "dify-config.yaml"),
-    );
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.mkdirSync(this.teamDir, { recursive: true });
     fs.mkdirSync(this.teamSecretsDir, { recursive: true });
     this.reload();
-    this.migrateFromLegacyDifyConfigIfNeeded();
   }
 
   private teamFilePath(teamId: string) {
@@ -83,42 +77,14 @@ ${YAML.stringify(secrets, { lineWidth: 100 })}`;
     }
   }
 
-  /** One-time: copy bridge_base_url / agents_md_path from legacy dify-config.yaml. */
-  private migrateFromLegacyDifyConfigIfNeeded() {
-    if (!fs.existsSync(this.legacyDifyConfigPath)) return;
-    const legacy = this.loadFile(this.legacyDifyConfigPath);
-    const patch: Partial<StudioConfig> = {};
-    if (
-      !this.config.bridge_base_url?.trim() ||
-      this.config.bridge_base_url.includes("host.docker.internal")
-    ) {
-      const url = String(legacy.bridge_base_url || "").trim();
-      if (url) patch.bridge_base_url = url;
-    }
-    if (!this.config.agents_md_path?.trim() || this.config.agents_md_path === "auto") {
-      const md = String(legacy.agents_md_path || "").trim();
-      if (md) patch.agents_md_path = md;
-    }
-    if (Object.keys(patch).length) {
-      this.update(patch);
-    }
-  }
-
   private globalDefaults(): StudioConfig {
     const fromEnv: Partial<StudioConfig> = {};
     if (process.env.STUDIO_LANGUAGE === "zh" || process.env.STUDIO_LANGUAGE === "en") {
       fromEnv.language = process.env.STUDIO_LANGUAGE;
     }
-    // Prefer STUDIO_*; DIFY_* kept as deprecated aliases for old .env files.
-    const bridgeUrl =
-      process.env.STUDIO_BRIDGE_BASE_URL?.trim() ||
-      process.env.DIFY_BRIDGE_BASE_URL?.trim() ||
-      "";
+    const bridgeUrl = process.env.STUDIO_BRIDGE_BASE_URL?.trim() || "";
     if (bridgeUrl) fromEnv.bridge_base_url = bridgeUrl;
-    const agentsMd =
-      process.env.STUDIO_AGENTS_MD_PATH?.trim() ||
-      process.env.DIFY_AGENTS_MD_PATH?.trim() ||
-      "";
+    const agentsMd = process.env.STUDIO_AGENTS_MD_PATH?.trim() || "";
     if (agentsMd) fromEnv.agents_md_path = agentsMd;
     return StudioConfigSchema.parse({
       ...this.loadFile(this.filePath),

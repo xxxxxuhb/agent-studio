@@ -19,7 +19,7 @@ describe("run artifacts allowlist", () => {
 
   before(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-art-"));
-    runsDir = path.join(root, "repo", "docs", "dify-runs", runId);
+    runsDir = path.join(root, "repo", "docs", "runs", runId);
     fs.mkdirSync(runsDir, { recursive: true });
     fs.writeFileSync(path.join(runsDir, "review-report.md"), "# review\nok\n");
     fs.writeFileSync(path.join(runsDir, "commit-record.md"), "- committed: true\n");
@@ -89,7 +89,7 @@ describe("run artifacts allowlist", () => {
     assert.throws(() => readRunArtifact(runId, "secret/key.txt"));
   });
 
-  it("artifactRootForRun falls back to docs/dify-runs/{id}", () => {
+  it("artifactRootForRun falls back to docs/runs/{id}", () => {
     const fallback = artifactRootForRun({
       id: "x",
       createdAt: "",
@@ -105,7 +105,59 @@ describe("run artifacts allowlist", () => {
     });
     assert.equal(
       fallback,
-      path.resolve("/tmp/demo", "docs", "dify-runs", "x"),
+      path.resolve("/tmp/demo", "docs", "runs", "x"),
     );
+  });
+
+  it("artifactRootForRun dual-reads legacy docs/dify-runs when new path missing", () => {
+    const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-art-leg-"));
+    try {
+      const repo = path.join(legacyRoot, "repo");
+      const legacy = path.join(repo, "docs", "dify-runs", "legacy1");
+      fs.mkdirSync(legacy, { recursive: true });
+      const resolved = artifactRootForRun({
+        id: "legacy1",
+        createdAt: "",
+        updatedAt: "",
+        agentsMdPath: "",
+        repoPath: repo,
+        rawRequirement: "",
+        status: "completed",
+        currentStage: "review",
+        feedback: "",
+        lastSummary: "",
+        artifacts: {},
+      });
+      assert.equal(resolved, path.resolve(legacy));
+    } finally {
+      fs.rmSync(legacyRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("artifactRootForRun prefers docs/runs over legacy when both exist", () => {
+    const bothRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-art-both-"));
+    try {
+      const repo = path.join(bothRoot, "repo");
+      const preferred = path.join(repo, "docs", "runs", "both1");
+      const legacy = path.join(repo, "docs", "dify-runs", "both1");
+      fs.mkdirSync(preferred, { recursive: true });
+      fs.mkdirSync(legacy, { recursive: true });
+      const resolved = artifactRootForRun({
+        id: "both1",
+        createdAt: "",
+        updatedAt: "",
+        agentsMdPath: "",
+        repoPath: repo,
+        rawRequirement: "",
+        status: "completed",
+        currentStage: "review",
+        feedback: "",
+        lastSummary: "",
+        artifacts: {},
+      });
+      assert.equal(resolved, path.resolve(preferred));
+    } finally {
+      fs.rmSync(bothRoot, { recursive: true, force: true });
+    }
   });
 });

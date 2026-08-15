@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
 import { In, Repository } from "typeorm";
@@ -13,6 +13,7 @@ import {
 } from "@agent-studio/agent-schema";
 import { bridgeAuthHeaders } from "../bridges/bridge-http";
 import { BridgesService } from "../bridges/bridges.service";
+import { RunArtifactEntity } from "./entities/run-artifact.entity";
 import { RunLogEntryEntity } from "./entities/run-log-entry.entity";
 import { RunLogMetaEntity } from "./entities/run-log-meta.entity";
 import {
@@ -31,13 +32,24 @@ function pathBasenameOnly(name: string): string {
   return raw;
 }
 
+function basenameFromPath(path: string): string {
+  const raw = String(path || "").trim();
+  if (!raw) return "";
+  const parts = raw.split(/[/\\]/);
+  return parts[parts.length - 1] || raw;
+}
+
 @Injectable()
 export class RunLogsService {
+  private readonly logger = new Logger(RunLogsService.name);
+
   constructor(
     @InjectRepository(RunLogMetaEntity)
     private readonly metas: Repository<RunLogMetaEntity>,
     @InjectRepository(RunLogEntryEntity)
     private readonly entries: Repository<RunLogEntryEntity>,
+    @InjectRepository(RunArtifactEntity)
+    private readonly artifacts: Repository<RunArtifactEntity>,
     private readonly bridges: BridgesService,
   ) {}
 
@@ -56,7 +68,6 @@ export class RunLogsService {
       executor: entity.executor || "",
       project_id: entity.project_id || "",
       work_order_status: entity.work_order_status || "",
-      dify_workflow_run_id: entity.dify_workflow_run_id || "",
       bridge_run_id: entity.bridge_run_id || "",
       bridge_stage: entity.bridge_stage || "",
       last_error: entity.last_error || "",
@@ -86,34 +97,23 @@ export class RunLogsService {
   }
 
   private correlationFromOrder(order: WorkOrder): {
-    dify_workflow_run_id: string;
     bridge_run_id: string;
     bridge_stage: string;
     last_error: string;
   } {
     const studio = order.run?.studio;
-    const dify = order.run?.dify;
     const lastBridgeStage = [...(order.run?.events || [])]
       .reverse()
       .find((e) => e.type === "bridge_stage" && e.bridge_stage)?.bridge_stage;
-    const err =
-      (studio?.error || "").trim() ||
-      (dify?.error || "").trim() ||
-      (dify?.raw_summary || "").trim();
+    const err = (studio?.error || "").trim();
     const lastError =
       order.status === "failed" ||
       studio?.status === "failed" ||
-      dify?.status === "failed" ||
       /失败|error|503|不可达/i.test(err)
         ? err.slice(0, 2000)
         : err.slice(0, 2000);
     return {
-      dify_workflow_run_id: (dify?.workflow_run_id || "").trim(),
-      bridge_run_id: (
-        studio?.bridge_run_id ||
-        dify?.bridge_run_id ||
-        ""
-      ).trim(),
+      bridge_run_id: (studio?.bridge_run_id || "").trim(),
       bridge_stage: (
         lastBridgeStage ||
         studio?.current_stage ||
@@ -135,7 +135,6 @@ export class RunLogsService {
       executor: next.executor || "",
       project_id: next.project_id || "",
       work_order_status: next.work_order_status || "",
-      dify_workflow_run_id: next.dify_workflow_run_id || "",
       bridge_run_id: next.bridge_run_id || "",
       bridge_stage: next.bridge_stage || "",
       last_error: next.last_error || "",
@@ -163,7 +162,6 @@ export class RunLogsService {
     executor?: string;
     project_id?: string;
     work_order_status?: string;
-    dify_workflow_run_id?: string;
     bridge_run_id?: string;
     bridge_stage?: string;
     last_error?: string;
@@ -183,8 +181,6 @@ export class RunLogsService {
       project_id: meta.project_id ?? existing?.project_id ?? "",
       work_order_status:
         meta.work_order_status ?? existing?.work_order_status ?? "",
-      dify_workflow_run_id:
-        meta.dify_workflow_run_id ?? existing?.dify_workflow_run_id ?? "",
       bridge_run_id: meta.bridge_run_id ?? existing?.bridge_run_id ?? "",
       bridge_stage: meta.bridge_stage ?? existing?.bridge_stage ?? "",
       last_error: meta.last_error ?? existing?.last_error ?? "",
@@ -227,8 +223,6 @@ export class RunLogsService {
         team_id: order.team_id || existing.team_id,
         work_order_status: order.status,
         project_id: order.project_id || existing.project_id,
-        dify_workflow_run_id:
-          corr.dify_workflow_run_id || existing.dify_workflow_run_id || "",
         bridge_run_id: corr.bridge_run_id || existing.bridge_run_id || "",
         bridge_stage: corr.bridge_stage || existing.bridge_stage || "",
         last_error: corr.last_error || existing.last_error || "",
@@ -376,7 +370,6 @@ export class RunLogsService {
         where: [
           { ...where, run_id: qRaw },
           { ...where, work_order_id: qRaw },
-          { ...where, dify_workflow_run_id: qRaw },
           { ...where, bridge_run_id: qRaw },
         ],
       });
@@ -411,7 +404,6 @@ export class RunLogsService {
           (m.title || "").toLowerCase().includes(n) ||
           (m.pipeline_name || "").toLowerCase().includes(n) ||
           (m.pipeline_id || "").toLowerCase().includes(n) ||
-          (m.dify_workflow_run_id || "").toLowerCase().includes(n) ||
           (m.bridge_run_id || "").toLowerCase().includes(n) ||
           (m.bridge_stage || "").toLowerCase().includes(n) ||
           (m.last_error || "").toLowerCase().includes(n),
@@ -424,7 +416,7 @@ export class RunLogsService {
   }
 
   /**
-   * Resolve a Studio / Dify / Bridge / work-order id to a single run meta.
+   * Resolve a Studio / Bridge / work-order id to a single run meta.
    * Prefer exact indexed match; fall back to list(q) first hit.
    */
   async lookup(opts: {
@@ -445,7 +437,6 @@ export class RunLogsService {
         where: [
           { ...where, run_id: q },
           { ...where, work_order_id: q },
-          { ...where, dify_workflow_run_id: q },
           { ...where, bridge_run_id: q },
         ],
         order: { updated_at: "DESC" },
@@ -511,7 +502,131 @@ export class RunLogsService {
     return { bridgeRunId, studioBaseUrl };
   }
 
-  /** Proxy Bridge GET /runs/:bridgeRunId/artifacts (team-scoped via run meta). */
+  private async tryBridgeBaseForMeta(
+    meta: RunLogMeta,
+  ): Promise<{ bridgeRunId: string; studioBaseUrl: string } | null> {
+    try {
+      return await this.bridgeBaseForMeta(meta);
+    } catch {
+      return null;
+    }
+  }
+
+  private storedItem(row: RunArtifactEntity) {
+    return {
+      name: row.name,
+      bytes: row.bytes,
+      updated_at: row.captured_at,
+      role: row.role || undefined,
+      source: "stored" as const,
+    };
+  }
+
+  /**
+   * Fetch artifact bodies from Bridge and upsert into MySQL.
+   * Best-effort: skips missing files / offline Bridge; never throws to caller job.
+   */
+  async captureArtifactsFromPaths(input: {
+    studio_run_id: string;
+    work_order_id: string;
+    team_id?: string;
+    step_id?: string;
+    paths: string[];
+  }): Promise<{ captured: number; skipped: number }> {
+    const studioRunId = (input.studio_run_id || "").trim();
+    const paths = (input.paths || []).map((p) => p.trim()).filter(Boolean);
+    if (!studioRunId || !paths.length) return { captured: 0, skipped: 0 };
+
+    let meta = await this.metas.findOne({ where: { run_id: studioRunId } });
+    if (!meta) {
+      // Ensure meta exists so later list/read is team-scoped.
+      await this.ensureRun({
+        run_id: studioRunId,
+        work_order_id: input.work_order_id,
+        team_id: input.team_id || "",
+      });
+      meta = await this.metas.findOne({ where: { run_id: studioRunId } });
+    }
+    if (!meta) return { captured: 0, skipped: paths.length };
+
+    const bridge = await this.tryBridgeBaseForMeta(this.toMeta(meta));
+    if (!bridge) {
+      this.logger.debug(
+        `captureArtifacts: Bridge unavailable for ${studioRunId}`,
+      );
+      return { captured: 0, skipped: paths.length };
+    }
+
+    let captured = 0;
+    let skipped = 0;
+    const stamp = this.nowIso();
+    const seen = new Set<string>();
+
+    for (const relPath of paths) {
+      const name = basenameFromPath(relPath);
+      if (!name || seen.has(name)) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(name);
+
+      const url = `${bridge.studioBaseUrl}/runs/${encodeURIComponent(bridge.bridgeRunId)}/artifacts/${encodeURIComponent(name)}`;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: bridgeAuthHeaders(),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!res.ok) {
+          skipped += 1;
+          continue;
+        }
+        const body = (await res.json()) as {
+          name?: string;
+          bytes?: number;
+          content_type?: string;
+          content?: string;
+          role?: string;
+        };
+        const content = String(body.content ?? "");
+        // Cap aligns with Bridge text read limit (~2MB).
+        if (content.length > 2_000_000) {
+          skipped += 1;
+          continue;
+        }
+        await this.artifacts.upsert(
+          {
+            studio_run_id: studioRunId,
+            name,
+            rel_path: relPath.slice(0, 512),
+            work_order_id: input.work_order_id || meta.work_order_id || "",
+            team_id: input.team_id || meta.team_id || "",
+            step_id: input.step_id || "",
+            role: (body.role || "").slice(0, 64),
+            content_type:
+              body.content_type || "text/plain; charset=utf-8",
+            bytes: typeof body.bytes === "number" ? body.bytes : content.length,
+            content,
+            captured_at: stamp,
+          },
+          {
+            conflictPaths: ["studio_run_id", "name"],
+            skipUpdateIfNoValuesChanged: true,
+          },
+        );
+        captured += 1;
+      } catch (err) {
+        skipped += 1;
+        this.logger.debug(
+          `captureArtifacts ${name}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return { captured, skipped };
+  }
+
+  /** Proxy Bridge artifacts list; union with MySQL-stored blobs when Bridge is gone. */
   async listArtifacts(studioRunId: string) {
     const metaEntity = await this.metas.findOne({
       where: { run_id: studioRunId },
@@ -520,42 +635,84 @@ export class RunLogsService {
       throw new NotFoundException(`run log not found: ${studioRunId}`);
     }
     const meta = this.toMeta(metaEntity);
-    const { bridgeRunId, studioBaseUrl } = await this.bridgeBaseForMeta(meta);
-    const url = `${studioBaseUrl}/runs/${encodeURIComponent(bridgeRunId)}/artifacts`;
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "GET",
-        headers: bridgeAuthHeaders(),
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (err) {
+    const storedRows = await this.artifacts.find({
+      where: { studio_run_id: studioRunId },
+      order: { captured_at: "DESC" },
+    });
+
+    const bridge = await this.tryBridgeBaseForMeta(meta);
+    let liveItems: Array<{
+      name: string;
+      bytes: number;
+      updated_at: string;
+      role?: string;
+      source: "bridge";
+    }> = [];
+    let bridgeError = "";
+
+    if (bridge) {
+      const url = `${bridge.studioBaseUrl}/runs/${encodeURIComponent(bridge.bridgeRunId)}/artifacts`;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: bridgeAuthHeaders(),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (res.ok) {
+          const body = (await res.json()) as {
+            root?: string;
+            items?: Array<{
+              name: string;
+              bytes: number;
+              updated_at: string;
+              role?: string;
+            }>;
+          };
+          liveItems = (body.items || []).map((it) => ({
+            ...it,
+            source: "bridge" as const,
+          }));
+          const byName = new Map(
+            storedRows.map((r) => [r.name, this.storedItem(r)]),
+          );
+          for (const it of liveItems) byName.delete(it.name);
+          return {
+            studio_run_id: studioRunId,
+            bridge_run_id: bridge.bridgeRunId,
+            bridge_base_url: bridge.studioBaseUrl,
+            root: body.root || "",
+            items: [...liveItems, ...byName.values()],
+            stored_count: storedRows.length,
+          };
+        }
+        bridgeError = `Bridge HTTP ${res.status}`;
+      } catch (err) {
+        bridgeError = err instanceof Error ? err.message : String(err);
+      }
+    } else if (!(meta.bridge_run_id || "").trim()) {
+      bridgeError = "尚无 bridge_run_id";
+    } else {
+      bridgeError = "无在线 Bridge";
+    }
+
+    if (!storedRows.length) {
       throw new BadRequestException(
-        `Bridge 不可达（产物列表）：${err instanceof Error ? err.message : String(err)}`,
+        bridgeError
+          ? `${bridgeError}；且尚未入库产物内容。阶段完成时会自动抓取入库。`
+          : "暂无产物",
       );
     }
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new BadRequestException(
-        `Bridge 产物列表失败 HTTP ${res.status}: ${text.slice(0, 300)}`,
-      );
-    }
-    const body = (await res.json()) as {
-      run_id?: string;
-      root?: string;
-      items?: Array<{
-        name: string;
-        bytes: number;
-        updated_at: string;
-        role?: string;
-      }>;
-    };
+
     return {
       studio_run_id: studioRunId,
-      bridge_run_id: bridgeRunId,
-      bridge_base_url: studioBaseUrl,
-      root: body.root || "",
-      items: body.items || [],
+      bridge_run_id: (meta.bridge_run_id || "").trim(),
+      bridge_base_url: "",
+      root: "",
+      items: storedRows.map((r) => this.storedItem(r)),
+      stored_count: storedRows.length,
+      hint: bridgeError
+        ? `Bridge 不可用（${bridgeError}）；以下为已入库产物。`
+        : undefined,
     };
   }
 
@@ -567,31 +724,51 @@ export class RunLogsService {
       throw new NotFoundException(`run log not found: ${studioRunId}`);
     }
     const meta = this.toMeta(metaEntity);
-    const { bridgeRunId, studioBaseUrl } = await this.bridgeBaseForMeta(meta);
     const safeName = pathBasenameOnly(name);
-    const url = `${studioBaseUrl}/runs/${encodeURIComponent(bridgeRunId)}/artifacts/${encodeURIComponent(safeName)}`;
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "GET",
-        headers: bridgeAuthHeaders(),
-        signal: AbortSignal.timeout(30_000),
-      });
-    } catch (err) {
-      throw new BadRequestException(
-        `Bridge 不可达（读产物）：${err instanceof Error ? err.message : String(err)}`,
+    const bridge = await this.tryBridgeBaseForMeta(meta);
+
+    if (bridge) {
+      const url = `${bridge.studioBaseUrl}/runs/${encodeURIComponent(bridge.bridgeRunId)}/artifacts/${encodeURIComponent(safeName)}`;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: bridgeAuthHeaders(),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          return { ...body, source: "bridge" };
+        }
+        if (res.status !== 404) {
+          const text = await res.text().catch(() => "");
+          this.logger.debug(
+            `Bridge read ${safeName} HTTP ${res.status}: ${text.slice(0, 200)}`,
+          );
+        }
+      } catch (err) {
+        this.logger.debug(
+          `Bridge read ${safeName}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const row = await this.artifacts.findOne({
+      where: { studio_run_id: studioRunId, name: safeName },
+    });
+    if (!row) {
+      throw new NotFoundException(
+        `artifact not found: ${safeName}（Bridge 与入库均无）`,
       );
     }
-    if (res.status === 404) {
-      throw new NotFoundException(`artifact not found: ${safeName}`);
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new BadRequestException(
-        `Bridge 读产物失败 HTTP ${res.status}: ${text.slice(0, 300)}`,
-      );
-    }
-    return res.json();
+    return {
+      name: row.name,
+      bytes: row.bytes,
+      updated_at: row.captured_at,
+      content_type: row.content_type,
+      content: row.content,
+      role: row.role || undefined,
+      source: "stored" as const,
+    };
   }
 
   /** Used by bootstrap migrate: insert meta + entries if run_id missing. */

@@ -601,7 +601,7 @@ export async function applyStudioDecision(
       feedback: feedback || "",
     });
   } catch (err) {
-    // Bridge may already have advanced without /decision (Dify-style). Continue.
+    // Bridge may already have advanced without /decision. Continue.
     const msg = err instanceof Error ? err.message : String(err);
     if (!/404|not found|no pending/i.test(msg)) {
       // Still try to continue on soft mismatch; hard errors fail.

@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-/** Shared secret for Bridge HTTP (Dify / Studio → Bridge). */
+/** Shared secret for Bridge HTTP (Studio → Bridge). */
 export function bridgeHttpToken(): string {
   return (
     process.env.BRIDGE_HTTP_TOKEN ||
@@ -39,7 +39,7 @@ export async function requireBridgeHttpAuth(
 
   const got = extractRequestToken(req);
   if (!got || got !== expected) {
-    // Use 400 (not 401/403): Dify's ssrf_proxy client treats any 401/403 that
+    // Use 400 (not 401/403): some SSRF proxy clients treat any 401/403 that
     // passes through Squid (Via: squid) as "blocked by SSRF protection", which
     // hides the real Bridge HTTP auth failure from workflow users.
     return reply.code(400).send({

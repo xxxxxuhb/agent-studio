@@ -1,10 +1,11 @@
 /**
  * Map Studio digital-human / step agent id → Bridge `/runs/:id/:stage`.
- * Keep in sync with apps/studio-api dify-dsl.generator `bridgeStageForAgent`.
  */
 
 export type StageMapAgent = {
   role?: string | null;
+  bridge?: { stage_id?: string | null } | null;
+  /** @deprecated legacy MySQL field — prefer `bridge.stage_id` */
   dify?: { agent_id?: string | null } | null;
 };
 
@@ -23,8 +24,9 @@ export function bridgeStageForAgent(
   agent: StageMapAgent | null | undefined,
   agentId: string,
 ): string {
-  const fromDify = agent?.dify?.agent_id?.trim();
-  if (fromDify) return fromDify;
+  const fromBridge =
+    agent?.bridge?.stage_id?.trim() || agent?.dify?.agent_id?.trim();
+  if (fromBridge) return fromBridge;
 
   if (KNOWN[agentId]) return KNOWN[agentId];
 

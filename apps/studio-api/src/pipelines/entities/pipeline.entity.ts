@@ -37,9 +37,6 @@ export class PipelineEntity {
   @Column({ type: "json" })
   steps!: unknown[];
 
-  @Column({ type: "json" })
-  dify!: Record<string, unknown>;
-
   @CreateDateColumn({ type: "datetime" })
   created_at!: Date;
 

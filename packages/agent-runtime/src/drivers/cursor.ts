@@ -1,5 +1,6 @@
 import { Agent, CursorAgentError } from "@cursor/sdk";
 import type { AgentDriver, AgentRunRequest, AgentRunResult } from "../types.js";
+import { usageFromCursorTokens } from "../usage.js";
 import { hasCursorCredentials } from "./cursor-auth.js";
 
 function modelId() {
@@ -22,21 +23,51 @@ export class CursorAgentDriver implements AgentDriver {
     }
     const apiKey = process.env.CURSOR_API_KEY?.trim();
     try {
-      const result = await Agent.prompt(request.prompt, {
+      // create/send/wait (vs Agent.prompt) so we can call getUsage before dispose.
+      const agent = await Agent.create({
         ...(apiKey ? { apiKey } : {}),
         model: { id: modelId() },
         local: { cwd: request.cwd },
       });
-      if (result.status === "error") {
-        throw new Error(`Cursor run failed: ${result.id}`);
+      try {
+        const run = await agent.send(request.prompt);
+        const result = await run.wait();
+        if (result.status === "error") {
+          throw new Error(
+            `Cursor run failed: ${result.id}${
+              result.error?.message ? ` (${result.error.message})` : ""
+            }`,
+          );
+        }
+
+        let costCents: number | undefined;
+        let billedUsage = result.usage;
+        try {
+          const billed = await agent.getUsage();
+          if (!billedUsage && billed.usage) billedUsage = billed.usage;
+          if (billed.cost && typeof billed.cost.chargedCents === "number") {
+            costCents = billed.cost.chargedCents;
+          } else if (
+            billed.cost &&
+            typeof billed.cost.rawCostCents === "number"
+          ) {
+            costCents = billed.cost.rawCostCents;
+          }
+        } catch {
+          // Cost is eventually consistent / optional; tokens from the run still count.
+        }
+
+        return {
+          summary: result.result || `${request.stage} completed`,
+          raw: result.result || "",
+          driver: this.id,
+          dryRun: false,
+          providerRunId: agent.agentId || result.id,
+          usage: usageFromCursorTokens(billedUsage, costCents),
+        };
+      } finally {
+        agent.close();
       }
-      return {
-        summary: result.result || `${request.stage} completed`,
-        raw: result.result || "",
-        driver: this.id,
-        dryRun: false,
-        providerRunId: result.id,
-      };
     } catch (err) {
       if (err instanceof CursorAgentError) {
         throw new Error(

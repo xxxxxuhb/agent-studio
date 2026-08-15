@@ -13,6 +13,7 @@ import {
   RunLogEntrySchema,
   RunLogMetaSchema,
   WorkOrderSchema,
+  bridgeBindingFromLegacy,
   type ProjectRepo,
 } from "@agent-studio/agent-schema";
 import { AuthService } from "../auth/auth.service";
@@ -352,7 +353,9 @@ export class BootstrapService implements OnModuleInit {
             enabled: a.enabled !== false,
             avatar_label: a.avatar_label || "",
             tags: a.tags || [],
-            dify: (a.dify || {}) as Record<string, unknown>,
+            bridge: bridgeBindingFromLegacy(
+              raw.bridge ?? raw.dify,
+            ) as Record<string, unknown>,
             created_at: a.created_at ? new Date(a.created_at) : undefined,
             updated_at: a.updated_at ? new Date(a.updated_at) : undefined,
           }),
@@ -424,7 +427,6 @@ export class BootstrapService implements OnModuleInit {
               on_reject: "end",
             }) as Record<string, unknown>,
             steps: p.steps || [],
-            dify: (p.dify || {}) as Record<string, unknown>,
             created_at: p.created_at ? new Date(p.created_at) : undefined,
             updated_at: p.updated_at ? new Date(p.updated_at) : undefined,
           }),

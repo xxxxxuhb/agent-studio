@@ -53,7 +53,7 @@ Verify: `npx @agent-studio/bridge start --driver trae|qoder` then `GET /health` 
 
 `manager` → `requirement` → `plan` → `dev` → `review` → `test` → `release_test`
 
-- Dify/Studio pipelines may call a subset (e.g. `code-dev` ends at `review`).
+- Studio pipelines may call a subset (e.g. `code-dev` ends at `review`).
 - `review`: agent writes the review report; on pass the **review agent** git **commits** + **pushes** and writes `commit-record.md`. Bridge then opens a merge **PR/MR** via forge API (`BRIDGE_GIT_CREATE_PR` + `GITLAB_TOKEN` / `GITHUB_TOKEN`).
 
 Set a shared token on Studio (`STUDIO_BRIDGE_TOKEN`) and pass the same `--token`.

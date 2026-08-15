@@ -44,9 +44,9 @@ describe("buildRunLogTrace", () => {
       entry({
         id: "2",
         at: "2026-01-01T00:00:01.000Z",
-        event_type: "dify_started",
-        message: "Dify started",
-        source: "dify",
+        event_type: "human_input_required",
+        message: "等待人工确认",
+        source: "human",
       }),
       entry({
         id: "3",
@@ -76,14 +76,14 @@ describe("buildRunLogTrace", () => {
         id: "6",
         at: "2026-01-01T00:00:05.000Z",
         level: "error",
-        message: "Dify failed: bridge_busy",
-        source: "dify",
+        message: "Studio failed: bridge_busy",
+        source: "system",
       }),
     ]);
 
     assert.equal(steps.length, 5);
     assert.equal(steps[0].kind, "run_started");
-    assert.equal(steps[1].kind, "dify_started");
+    assert.equal(steps[1].kind, "human_input_required");
     assert.equal(steps[2].kind, "bridge_stage");
     assert.equal(steps[2].label, "implement");
     assert.equal(steps[3].kind, "bridge_stage");

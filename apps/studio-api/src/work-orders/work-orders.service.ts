@@ -193,7 +193,6 @@ export class WorkOrdersService implements OnModuleInit {
       bridge_stage?: string;
       bridge_run_id?: string;
       dry_run?: boolean;
-      dify_status?: string;
       action?: string;
       detail?: Record<string, unknown>;
       id?: string;
@@ -212,7 +211,6 @@ export class WorkOrdersService implements OnModuleInit {
       bridge_stage: partial.bridge_stage,
       bridge_run_id: partial.bridge_run_id,
       dry_run: partial.dry_run,
-      dify_status: partial.dify_status,
       action: partial.action,
       detail: partial.detail,
     };
@@ -226,15 +224,13 @@ export class WorkOrdersService implements OnModuleInit {
     const source =
       event.type === "bridge_stage"
         ? ("bridge" as const)
-        : event.type.startsWith("dify_")
-          ? ("dify" as const)
-          : event.type === "human_decision" || event.type === "human_input_required"
-            ? ("human" as const)
-            : event.type === "step_mirrored"
-              ? ("pipeline" as const)
-              : event.type === "info" && /选仓|总管/.test(event.message)
-                ? ("manager" as const)
-                : ("system" as const);
+        : event.type === "human_decision" || event.type === "human_input_required"
+          ? ("human" as const)
+          : event.type === "step_mirrored"
+            ? ("pipeline" as const)
+            : event.type === "info" && /选仓|总管/.test(event.message)
+              ? ("manager" as const)
+              : ("system" as const);
     this.mirrorRunLog(order, {
       source,
       level:
@@ -251,7 +247,6 @@ export class WorkOrdersService implements OnModuleInit {
       detail: {
         ...(event.detail || {}),
         dry_run: event.dry_run,
-        dify_status: event.dify_status,
         action: event.action,
         bridge_run_id: event.bridge_run_id,
       },
@@ -817,7 +812,6 @@ export class WorkOrdersService implements OnModuleInit {
               started_at: undefined,
               finished_at: undefined,
               bridge_run_id: "",
-              dify_workflow_run_id: "",
               note: t.note || "reused from previous run",
             }))
           : [
@@ -830,7 +824,6 @@ export class WorkOrdersService implements OnModuleInit {
                 status: "running" as const,
                 note: "reused previous agents_md_path",
                 bridge_run_id: "",
-                dify_workflow_run_id: "",
               },
             ],
       };
@@ -912,7 +905,6 @@ export class WorkOrdersService implements OnModuleInit {
           prev.manager_routing_reason ||
           "reused from previous manager plan",
         bridge_run_id: "",
-        dify_workflow_run_id: "",
       };
     });
 
@@ -1320,16 +1312,28 @@ export class WorkOrdersService implements OnModuleInit {
     return this.resume(id, input);
   }
 
-  async decide(id: string, input: unknown): Promise<WorkOrder> {
+  async decide(
+    id: string,
+    input: unknown,
+    actor?: { user_id?: string; name?: string },
+  ): Promise<WorkOrder> {
     const body = WorkOrderDecisionSchema.parse(input);
     const order = await this.get(id);
     if (!order.run) throw new BadRequestException("工单尚未启动流水线");
-    return this.studioRunner.decide(id, body);
+    return this.studioRunner.decide(id, body, actor);
   }
 
-  async decideForUser(userId: string, id: string, input: unknown): Promise<WorkOrder> {
+  async decideForUser(
+    userId: string,
+    id: string,
+    input: unknown,
+    actorName?: string,
+  ): Promise<WorkOrder> {
     await this.requireWritableWorkOrder(userId, id);
-    return this.decide(id, input);
+    return this.decide(id, input, {
+      user_id: userId,
+      name: actorName || userId,
+    });
   }
 
   /** Local stub executor removed — steps run via Studio orchestrator. */
@@ -1462,11 +1466,8 @@ export class WorkOrdersService implements OnModuleInit {
     if (cur) {
       cur.status = "completed";
       cur.finished_at = stamp;
-      if (run.dify?.workflow_run_id) {
-        cur.dify_workflow_run_id = run.dify.workflow_run_id;
-      }
-      if (run.dify?.bridge_run_id) {
-        cur.bridge_run_id = run.dify.bridge_run_id;
+      if (run.studio?.bridge_run_id) {
+        cur.bridge_run_id = run.studio.bridge_run_id;
       }
       this.appendRunEvent(order, {
         type: "info",
@@ -1514,7 +1515,6 @@ export class WorkOrdersService implements OnModuleInit {
     }
     run.steps = pipelineSteps;
     run.current_step_index = 0;
-    run.dify = undefined;
 
     this.appendRunEvent(order, {
       type: "info",

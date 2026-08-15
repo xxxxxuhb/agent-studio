@@ -12,6 +12,8 @@ import { StudioConfigModule } from "./studio-config/studio-config.module";
 import { TeamsModule } from "./teams/teams.module";
 import { WorkOrdersModule } from "./work-orders/work-orders.module";
 import { TriggersModule } from "./triggers/triggers.module";
+import { UsageModule } from "./usage/usage.module";
+import { AuditModule } from "./audit/audit.module";
 
 @Module({
   imports: [
@@ -27,6 +29,8 @@ import { TriggersModule } from "./triggers/triggers.module";
     WorkOrdersModule,
     StudioConfigModule,
     TriggersModule,
+    UsageModule,
+    AuditModule,
   ],
   controllers: [HealthController],
 })

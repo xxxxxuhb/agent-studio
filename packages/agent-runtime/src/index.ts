@@ -3,7 +3,13 @@ export type {
   AgentDriverId,
   AgentRunRequest,
   AgentRunResult,
+  AgentUsageMetrics,
 } from "./types.js";
+export {
+  buildUsageMetrics,
+  usageFromCursorTokens,
+  usageFromQoderResult,
+} from "./usage.js";
 export { CursorAgentDriver } from "./drivers/cursor.js";
 export {
   ensureCursorAuth,

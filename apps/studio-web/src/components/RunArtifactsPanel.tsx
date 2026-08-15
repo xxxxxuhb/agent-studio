@@ -31,8 +31,10 @@ export function RunArtifactsPanel({
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
+  const [contentSource, setContentSource] = useState<string>("");
   const [contentLoading, setContentLoading] = useState(false);
   const [hint, setHint] = useState<string>("");
+  const [storedCount, setStoredCount] = useState(0);
 
   const uniqueSnapshots = [
     ...new Set(snapshotPaths.map((p) => p.trim()).filter(Boolean)),
@@ -45,15 +47,19 @@ export function RunArtifactsPanel({
     try {
       const res = await runLogsApi.listArtifacts(runId);
       setItems(res.items || []);
-      if (!res.items?.length) {
+      setStoredCount(res.stored_count || 0);
+      if (res.hint) {
+        setHint(res.hint);
+      } else if (!res.items?.length) {
         setHint(
           uniqueSnapshots.length
-            ? "Bridge 上暂无可读文件（可能已 gc）；下方为工单快照路径。"
-            : "Bridge 上该 run 暂无产物文件（或尚未写入 run 产物目录）。",
+            ? "暂无可读文件；下方为工单快照路径。阶段完成时会自动入库内容。"
+            : "该 run 暂无产物文件（或尚未写入 / 入库）。",
         );
       }
     } catch (err) {
       setItems([]);
+      setStoredCount(0);
       setHint(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
@@ -63,9 +69,11 @@ export function RunArtifactsPanel({
   async function openArtifact(name: string) {
     setSelected(name);
     setContentLoading(true);
+    setContentSource("");
     try {
       const res = await runLogsApi.readArtifact(runId, name);
       setContent(res.content || "");
+      setContentSource(res.source || "");
     } catch (err) {
       setContent("");
       message.error(err instanceof Error ? err.message : String(err));
@@ -77,72 +85,85 @@ export function RunArtifactsPanel({
   useEffect(() => {
     setSelected(null);
     setContent("");
+    setContentSource("");
     void reloadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
-  if (!bridgeRunId && !uniqueSnapshots.length) {
+  if (!bridgeRunId && !uniqueSnapshots.length && !items.length && !hint) {
     return (
       <Alert
         type="info"
         showIcon
         message="尚无 Bridge run"
-        description="流水线执行到 Bridge 阶段并回写 bridge_run_id 后，可在此查看 run 产物目录。"
+        description="流水线执行到 Bridge 阶段并回写 bridge_run_id 后，可在此查看 run 产物；阶段完成时内容会入库，Bridge gc 后仍可打开。"
       />
     );
   }
 
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      {bridgeRunId ? (
-        <Space wrap>
+      <Space wrap>
+        {bridgeRunId ? (
           <Typography.Text type="secondary">
             Bridge{" "}
             <Typography.Text code copyable>
               {bridgeRunId}
             </Typography.Text>
           </Typography.Text>
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            onClick={() => void reloadList()}
-            loading={loading}
-          >
-            刷新产物
-          </Button>
-        </Space>
-      ) : null}
+        ) : null}
+        {storedCount > 0 ? (
+          <Tag color="blue">已入库 {storedCount}</Tag>
+        ) : null}
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          onClick={() => void reloadList()}
+          loading={loading}
+          disabled={!runId}
+        >
+          刷新产物
+        </Button>
+      </Space>
 
-      {hint && !items.length ? (
-        <Alert type="warning" showIcon message={hint} />
-      ) : null}
+      {hint ? <Alert type="warning" showIcon message={hint} /> : null}
 
       {uniqueSnapshots.length ? (
         <div>
-          <Typography.Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
-            工单快照路径（阶段回写，不依赖 Bridge 磁盘）
+          <Typography.Text
+            type="secondary"
+            style={{ display: "block", marginBottom: 6 }}
+          >
+            工单快照路径（阶段回写）
           </Typography.Text>
           <List
             size="small"
             bordered
-            dataSource={uniqueSnapshots}
+            dataSource={uniqueSnapshots.filter((p) => {
+              const base = p.split(/[/\\]/).pop() || p;
+              // Skip bare run dirs (no extension) — not openable files.
+              return /\.[a-z0-9]+$/i.test(base);
+            })}
             renderItem={(path) => {
               const base = path.split(/[/\\]/).pop() || path;
+              const available = items.some((it) => it.name === base);
               return (
                 <List.Item>
                   <Space wrap>
                     <Typography.Text code copyable={{ text: path }}>
                       {path}
                     </Typography.Text>
-                    {bridgeRunId ? (
+                    {available ? (
                       <Button
                         type="link"
                         size="small"
                         onClick={() => void openArtifact(base)}
                       >
-                        尝试打开
+                        打开
                       </Button>
-                    ) : null}
+                    ) : (
+                      <Tag>未落盘</Tag>
+                    )}
                   </Space>
                 </List.Item>
               );
@@ -167,6 +188,11 @@ export function RunArtifactsPanel({
               >
                 <Space wrap>
                   <Typography.Text code>{item.name}</Typography.Text>
+                  {item.source === "stored" ? (
+                    <Tag color="blue">入库</Tag>
+                  ) : item.source === "bridge" ? (
+                    <Tag>Bridge</Tag>
+                  ) : null}
                   {item.role ? <Tag>{item.role}</Tag> : null}
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {item.bytes} B · {new Date(item.updated_at).toLocaleString()}
@@ -182,9 +208,14 @@ export function RunArtifactsPanel({
 
       {selected ? (
         <Spin spinning={contentLoading}>
-          <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-            {selected}
-          </Typography.Text>
+          <Space style={{ marginBottom: 8 }}>
+            <Typography.Text strong>{selected}</Typography.Text>
+            {contentSource === "stored" ? (
+              <Tag color="blue">来自入库</Tag>
+            ) : contentSource === "bridge" ? (
+              <Tag>来自 Bridge</Tag>
+            ) : null}
+          </Space>
           {content ? (
             <AgentOutputView output={content} maxHeight={420} />
           ) : !contentLoading ? (

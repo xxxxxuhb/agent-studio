@@ -4,12 +4,12 @@ Pluggable agent drivers used by Bridge.
 
 ## Drivers
 
-| id | Description | Auth |
-|----|-------------|------|
-| `cursor` | Cursor Agent SDK (`Agent.prompt`, local cwd) | `CURSOR_API_KEY` or `--login` |
-| `trae` | TraeCode CLI (`traecli -p …`) | `TRAECLI_PERSONAL_ACCESS_TOKEN` or `/login` |
-| `qoder` | Qoder Agent SDK (`query`) | `QODER_PERSONAL_ACCESS_TOKEN` or `QODER_AUTH=qodercli` |
-| `openai` | Placeholder — not implemented yet | — |
+| id | Description | Auth | Usage (token/cost) |
+|----|-------------|------|--------------------|
+| `cursor` | Cursor Agent SDK (`create`/`send`/`wait`, local cwd) | `CURSOR_API_KEY` or `--login` | Yes — `RunResult.usage` + `getUsage()` cost |
+| `trae` | TraeCode CLI (`traecli -p …`) | `TRAECLI_PERSONAL_ACCESS_TOKEN` or `/login` | No — CLI has no structured usage |
+| `qoder` | Qoder Agent SDK (`query`) | `QODER_PERSONAL_ACCESS_TOKEN` or `QODER_AUTH=qodercli` | Yes — result `usage` + `total_cost_usd` |
+| `openai` | Placeholder — not implemented yet | — | — |
 
 ## Switch driver
 

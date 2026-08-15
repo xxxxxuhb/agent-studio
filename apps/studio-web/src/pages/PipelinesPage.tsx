@@ -343,14 +343,6 @@ export function PipelinesPage() {
         steps,
         triggers,
         ...toPipelineGraph(steps, values.entry || ""),
-        dify: {
-          enabled: false,
-          api_base: "",
-          api_key: "",
-          app_id: "",
-          workflow_id: "",
-          note: "",
-        },
       };
       if (editingId) {
         await pipelinesApi.update(editingId, payload);

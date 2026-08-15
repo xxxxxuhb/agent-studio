@@ -110,7 +110,12 @@ export class WorkOrdersController {
     @Param("id") id: string,
     @Body() body: unknown,
   ) {
-    return this.workOrders.decideForUser(user.id, id, body);
+    return this.workOrders.decideForUser(
+      user.id,
+      id,
+      body,
+      user.display_name || user.username,
+    );
   }
 
   @Post("work-orders/:id/clarify")

@@ -135,10 +135,25 @@ Notes (2026-08-13): 编排主路径已通；本地栈只起 MySQL；Forge 用外
 
 已有：`artifact_paths` 快照、`commit_url` 外链、日志 Tab、Bridge gc。
 
-- [ ] **产物内容入库**（blob；路径快照在 Bridge gc 后文件会丢）。
-- [ ] **用量 / 成本**：按团队、驱动、工单记 token。
-- [ ] **审计日志**：谁批了、谁改了密钥 / 流水线。
+- [x] **产物内容入库**（`run_artifacts` MEDIUMTEXT；阶段完成时从 Bridge 抓取；列表/打开优先 Bridge，失败回落到入库）。
+- [x] **用量 / 成本**：`usage_events` 按团队/驱动/工单记事件；token/cost 字段可选（驱动上报后入库）；Web「用量与审计」。
+- [x] **驱动 usage 回传**：Cursor（`RunResult.usage` + `getUsage` cost）、Qoder（result `usage`/`total_cost_usd`）→ `AgentRunResult.usage` → Bridge `StageResult.usage`；Trae/OpenAI 暂无。
+- [x] **审计日志**：审批 / 流水线 CRUD / 设置与密钥变更写入 `audit_logs`（密钥只记字段名）。
 - [ ] （后置）桌面端公证 / 签名 / 自动更新——见 P1 bridge-desktop。
+
+已完成（产物 blob，2026-08-14）：
+- [x] 表 `run_artifacts` + `migrate-run-artifacts.sql`；TypeORM entity。
+- [x] `RunLogsService.captureArtifactsFromPaths`；runner 在 progress/outcome 合并路径后异步入库。
+- [x] list/read 产物：Bridge ∪ 入库；Web「产物」Tab 标 Bridge / 入库。
+- [x] Web 单测：`test/RunArtifactsPanel.test.tsx`（vitest + testing-library）。
+
+已完成（用量 / 审计，2026-08-14）：
+- [x] 表 `usage_events` / `audit_logs` + `migrate-usage-audit.sql`。
+- [x] Stage 完成记 usage；decide / pipeline*ForUser / settings PUT 记审计。
+- [x] API `GET /usage` `/usage/summary` `/audit-logs`；Web `/usage` 页。
+- [x] 单测：`studio-api/test/usage-audit.test.ts`、`studio-web/test/usage-audit-helpers.test.ts`。
+- [x] Cursor / Qoder 驱动填 `usage`；`agent-runtime` `usage.test.ts`。
+- [x] **去掉 Dify 兼容**：`dify.ts` 删除；数字人 `bridge.{stage_id,stage_name,note}`；pipeline/run.dify / `dify_workflow_run_id` 删除；产物默认 `docs/runs`（双读 `docs/dify-runs`）；`migrate-drop-dify.sql`。
 
 ### 工程债 / 中期优化
 

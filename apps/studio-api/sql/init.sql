@@ -105,7 +105,6 @@ CREATE TABLE IF NOT EXISTS `run_logs` (
   `executor` varchar(64) NOT NULL DEFAULT '',
   `project_id` varchar(64) NOT NULL DEFAULT '',
   `work_order_status` varchar(32) NOT NULL DEFAULT '',
-  `dify_workflow_run_id` varchar(128) NOT NULL DEFAULT '',
   `bridge_run_id` varchar(64) NOT NULL DEFAULT '',
   `bridge_stage` varchar(64) NOT NULL DEFAULT '',
   `last_error` text NOT NULL,
@@ -116,7 +115,6 @@ CREATE TABLE IF NOT EXISTS `run_logs` (
   PRIMARY KEY (`run_id`),
   KEY `IDX_run_logs_work_order_id` (`work_order_id`),
   KEY `IDX_run_logs_team_id` (`team_id`),
-  KEY `IDX_run_logs_dify_workflow_run_id` (`dify_workflow_run_id`),
   KEY `IDX_run_logs_bridge_run_id` (`bridge_run_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -141,6 +139,65 @@ CREATE TABLE IF NOT EXISTS `run_log_entries` (
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Bridge artifact file bodies (survive Bridge disk GC; basename matches Bridge API)
+CREATE TABLE IF NOT EXISTS `run_artifacts` (
+  `studio_run_id` varchar(64) NOT NULL,
+  `name` varchar(256) NOT NULL,
+  `rel_path` varchar(512) NOT NULL DEFAULT '',
+  `work_order_id` varchar(64) NOT NULL DEFAULT '',
+  `team_id` varchar(36) NOT NULL DEFAULT '',
+  `step_id` varchar(64) NOT NULL DEFAULT '',
+  `role` varchar(64) NOT NULL DEFAULT '',
+  `content_type` varchar(128) NOT NULL DEFAULT 'text/plain; charset=utf-8',
+  `bytes` int NOT NULL DEFAULT 0,
+  `content` mediumtext NOT NULL,
+  `captured_at` varchar(40) NOT NULL,
+  PRIMARY KEY (`studio_run_id`, `name`),
+  KEY `IDX_run_artifacts_work_order_id` (`work_order_id`),
+  KEY `IDX_run_artifacts_team_id` (`team_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `usage_events` (
+  `id` varchar(36) NOT NULL,
+  `at` varchar(40) NOT NULL,
+  `team_id` varchar(36) NOT NULL DEFAULT '',
+  `work_order_id` varchar(64) NOT NULL DEFAULT '',
+  `run_id` varchar(64) NOT NULL DEFAULT '',
+  `bridge_run_id` varchar(64) NOT NULL DEFAULT '',
+  `step_id` varchar(64) NOT NULL DEFAULT '',
+  `stage` varchar(64) NOT NULL DEFAULT '',
+  `driver` varchar(64) NOT NULL DEFAULT '',
+  `prompt_tokens` int NULL,
+  `completion_tokens` int NULL,
+  `total_tokens` int NULL,
+  `cost_usd` decimal(12,6) NULL,
+  `dry_run` tinyint NOT NULL DEFAULT 0,
+  `detail` json NULL,
+  PRIMARY KEY (`id`),
+  KEY `IDX_usage_events_team_id` (`team_id`),
+  KEY `IDX_usage_events_work_order_id` (`work_order_id`),
+  KEY `IDX_usage_events_at` (`at`),
+  KEY `IDX_usage_events_driver` (`driver`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `audit_logs` (
+  `id` varchar(36) NOT NULL,
+  `at` varchar(40) NOT NULL,
+  `team_id` varchar(36) NOT NULL DEFAULT '',
+  `actor_user_id` varchar(36) NOT NULL DEFAULT '',
+  `actor_name` varchar(128) NOT NULL DEFAULT '',
+  `action` varchar(64) NOT NULL,
+  `resource_type` varchar(64) NOT NULL DEFAULT '',
+  `resource_id` varchar(128) NOT NULL DEFAULT '',
+  `summary` varchar(512) NOT NULL DEFAULT '',
+  `detail` json NULL,
+  PRIMARY KEY (`id`),
+  KEY `IDX_audit_logs_team_id` (`team_id`),
+  KEY `IDX_audit_logs_actor_user_id` (`actor_user_id`),
+  KEY `IDX_audit_logs_at` (`at`),
+  KEY `IDX_audit_logs_action` (`action`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `digital_humans` (
   `id` varchar(64) NOT NULL,
   `team_id` varchar(36) NOT NULL,
@@ -157,7 +214,7 @@ CREATE TABLE IF NOT EXISTS `digital_humans` (
   `enabled` tinyint NOT NULL DEFAULT 1,
   `avatar_label` varchar(64) NOT NULL DEFAULT '',
   `tags` json NOT NULL,
-  `dify` json NOT NULL,
+  `bridge` json NOT NULL,
   `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),
@@ -177,7 +234,6 @@ CREATE TABLE IF NOT EXISTS `pipelines` (
   `source` json NOT NULL,
   `defaults` json NOT NULL,
   `steps` json NOT NULL,
-  `dify` json NOT NULL,
   `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),

@@ -86,14 +86,14 @@ project:
   role: ${repo.role || "unknown"}
 
 pipeline:
-  runs_dir: docs/dify-runs/{run_id}
-  requirement_doc: docs/dify-runs/{run_id}/requirement.md
-  plan_doc: docs/dify-runs/{run_id}/plan.md
-  dev_summary: docs/dify-runs/{run_id}/dev-summary.md
-  review_doc: docs/dify-runs/{run_id}/review-report.md
-  test_report: docs/dify-runs/{run_id}/test-report.md
-  release_notes: docs/dify-runs/{run_id}/release-notes-test.md
-  status_doc: docs/dify-runs/{run_id}/run-status.md
+  runs_dir: docs/runs/{run_id}
+  requirement_doc: docs/runs/{run_id}/requirement.md
+  plan_doc: docs/runs/{run_id}/plan.md
+  dev_summary: docs/runs/{run_id}/dev-summary.md
+  review_doc: docs/runs/{run_id}/review-report.md
+  test_report: docs/runs/{run_id}/test-report.md
+  release_notes: docs/runs/{run_id}/release-notes-test.md
+  status_doc: docs/runs/{run_id}/run-status.md
 
 commands:
   install: ""

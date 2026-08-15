@@ -29,6 +29,13 @@ export type StageResult = {
   raw?: string;
   driver?: string;
   dryRun?: boolean;
+  /** Optional token/cost telemetry when the driver reports it. */
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    cost_usd?: number;
+  };
 };
 
 export type CreateRunResult = {
@@ -78,6 +85,7 @@ export type OrchestratorAgentLookup = {
 
 export type StageMapAgentLike = {
   role?: string | null;
+  bridge?: { stage_id?: string | null } | null;
   dify?: { agent_id?: string | null } | null;
 };
 

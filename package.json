@@ -16,7 +16,7 @@
     "build:bridge-desktop": "npm run build:runtime && npm run build -w @agent-studio/bridge && npm run tauri:build -w @agent-studio/bridge-desktop",
     "bridge": "npm run build:runtime && npm run build -w @agent-studio/bridge && npm exec -w @agent-studio/bridge -- agent-studio-bridge",
     "build": "npm run build -w @agent-studio/agent-schema && npm run build -w @agent-studio/orchestrator && npm run build -w @agent-studio/agent-runtime && npm run build -w @agent-studio/bridge && npm run build -w @agent-studio/studio-api && npm run build -w @agent-studio/studio-web && npm run build -w @agent-studio/studio-bridge",
-    "test": "npm test -w @agent-studio/bridge && npm test -w @agent-studio/orchestrator && npm test -w @agent-studio/studio-api",
+    "test": "npm test -w @agent-studio/agent-runtime && npm test -w @agent-studio/bridge && npm test -w @agent-studio/orchestrator && npm test -w @agent-studio/studio-api && npm test -w @agent-studio/studio-web",
     "typecheck": "npm run typecheck -w @agent-studio/bridge && npm run typecheck -w @agent-studio/orchestrator && npm run typecheck -w @agent-studio/studio-api",
     "seed": "npm run seed -w @agent-studio/studio-api"
   },

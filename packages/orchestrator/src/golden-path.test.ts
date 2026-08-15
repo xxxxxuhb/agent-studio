@@ -1,6 +1,6 @@
 /**
  * E2E golden path: work-order start → human approve → completed + artifacts.
- * Uses createHttpBridgeClient + fetch mock (no real Bridge / Dify).
+ * Uses createHttpBridgeClient + fetch mock (no real Bridge).
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -36,7 +36,7 @@ function mockFetchBridge(): {
         stage: "dev",
         status: "ok",
         summary: "dev patch ready",
-        artifacts: ["docs/dify-runs/br-golden-1/dev-summary.md"],
+        artifacts: ["docs/runs/br-golden-1/dev-summary.md"],
         pendingHumanApproval: true,
       });
     }
@@ -51,7 +51,7 @@ function mockFetchBridge(): {
         stage: "test",
         status: "ok",
         summary: "tests green",
-        artifacts: ["docs/dify-runs/br-golden-1/test-report.md"],
+        artifacts: ["docs/runs/br-golden-1/test-report.md"],
         pendingHumanApproval: false,
       });
     }

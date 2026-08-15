@@ -252,7 +252,7 @@ export function resolveWorkspaceTarget(input: {
 
     if (hinted) {
       // Absolute AGENTS.md from Studio Manager must win — never keyword-override.
-      // (Dify HTTP nodes often drop routing_mode=explicit; auto path used to ignore m-back.)
+      // (HTTP clients often drop routing_mode=explicit; auto path used to ignore m-back.)
       chosen = hinted;
     }
   }

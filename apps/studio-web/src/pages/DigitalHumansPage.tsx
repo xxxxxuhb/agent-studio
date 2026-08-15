@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert,
   Avatar,
   Button,
   Card,
@@ -69,9 +68,9 @@ type FormValues = {
   may_run_commands: boolean;
   may_commit: boolean;
   may_deploy: "none" | "staging" | "production";
-  dify_agent_id?: string;
-  dify_agent_name?: string;
-  dify_note?: string;
+  bridge_stage_id?: string;
+  bridge_stage_name?: string;
+  bridge_note?: string;
   human_gate_default: boolean;
   enabled: boolean;
 };
@@ -137,9 +136,9 @@ export function DigitalHumansPage() {
       may_run_commands: false,
       may_commit: false,
       may_deploy: "none",
-      dify_agent_id: "",
-      dify_agent_name: "",
-      dify_note: "",
+      bridge_stage_id: "",
+      bridge_stage_name: "",
+      bridge_note: "",
       human_gate_default: true,
       enabled: true,
     });
@@ -163,9 +162,9 @@ export function DigitalHumansPage() {
       may_run_commands: agent.permissions.may_run_commands,
       may_commit: Boolean(agent.permissions.may_commit),
       may_deploy: agent.permissions.may_deploy,
-      dify_agent_id: agent.dify?.agent_id || "",
-      dify_agent_name: agent.dify?.agent_name || "",
-      dify_note: agent.dify?.note || "",
+      bridge_stage_id: agent.bridge?.stage_id || "",
+      bridge_stage_name: agent.bridge?.stage_name || "",
+      bridge_note: agent.bridge?.note || "",
       human_gate_default: agent.human_gate_default,
       enabled: agent.enabled,
     });
@@ -193,10 +192,10 @@ export function DigitalHumansPage() {
         may_deploy: values.may_deploy,
         forbidden_paths_extra: [],
       },
-      dify: {
-        agent_id: (values.dify_agent_id || "").trim(),
-        agent_name: (values.dify_agent_name || "").trim(),
-        note: (values.dify_note || "").trim(),
+      bridge: {
+        stage_id: (values.bridge_stage_id || "").trim(),
+        stage_name: (values.bridge_stage_name || "").trim(),
+        note: (values.bridge_note || "").trim(),
       },
       inputs: [],
       outputs: [
@@ -395,19 +394,19 @@ export function DigitalHumansPage() {
                   </Descriptions.Item>
                   <Descriptions.Item label="Bridge stage 覆盖（可选）">
                     <Typography.Text type="secondary">
-                      可选元数据，映射到 schema 的 dify.agent_id（兼容字段）；步骤仍走 Studio 编排 → Bridge
+                      可选元数据，映射到 schema 的 bridge.stage_id；步骤仍走 Studio 编排 → Bridge
                     </Typography.Text>
-                    {selected.dify?.agent_id || selected.dify?.agent_name ? (
+                    {selected.bridge?.stage_id || selected.bridge?.stage_name ? (
                       <div>
-                        {selected.dify.agent_name || "—"} (
-                        {selected.dify.agent_id || "—"})
+                        {selected.bridge.stage_name || "—"} (
+                        {selected.bridge.stage_id || "—"})
                       </div>
                     ) : (
                       <div>未填写</div>
                     )}
-                    {selected.dify?.note ? (
+                    {selected.bridge?.note ? (
                       <div>
-                        <Typography.Text type="secondary">{selected.dify.note}</Typography.Text>
+                        <Typography.Text type="secondary">{selected.bridge.note}</Typography.Text>
                       </div>
                     ) : null}
                   </Descriptions.Item>
@@ -524,27 +523,18 @@ export function DigitalHumansPage() {
                 />
               </Form.Item>
             </Col>
-            <Col span={24}>
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="Bridge stage 覆盖（可选）"
-                description="下列字段写入 schema 的 dify.* 以保持兼容。真正执行仍是：Studio 编排 → HTTP 调用 Bridge。"
-              />
-            </Col>
             <Col span={12}>
               <Form.Item
-                name="dify_agent_id"
+                name="bridge_stage_id"
                 label="Bridge stage override"
-                extra="可选，映射到 dify.agent_id"
+                extra="可选，写入 bridge.stage_id"
               >
-                <Input placeholder="例如 stage / agent id" />
+                <Input placeholder="例如 stage id" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item
-                name="dify_agent_name"
+                name="bridge_stage_name"
                 label="显示名（可选）"
                 extra="可选显示名"
               >
@@ -552,7 +542,7 @@ export function DigitalHumansPage() {
               </Form.Item>
             </Col>
             <Col span={24}>
-              <Form.Item name="dify_note" label="备注">
+              <Form.Item name="bridge_note" label="备注">
                 <Input.TextArea rows={2} />
               </Form.Item>
             </Col>

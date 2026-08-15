@@ -14,6 +14,9 @@ import type {
   OrchestratorProgress,
 } from "@agent-studio/orchestrator";
 import { DigitalHumansService } from "../digital-humans/digital-humans.service";
+import { RunLogsService } from "../run-logs/run-logs.service";
+import { UsageService } from "../usage/usage.service";
+import { AuditService } from "../audit/audit.service";
 import {
   runStudioDecision,
   runStudioEvent,
@@ -32,7 +35,6 @@ type AppendEventPartial = {
   bridge_stage?: string;
   bridge_run_id?: string;
   dry_run?: boolean;
-  dify_status?: string;
   action?: string;
   detail?: Record<string, unknown>;
   id?: string;
@@ -50,6 +52,9 @@ export class WorkOrderStudioRunner {
 
   constructor(
     private readonly humans: DigitalHumansService,
+    private readonly runLogs: RunLogsService,
+    private readonly usage: UsageService,
+    private readonly audit: AuditService,
     @Inject(forwardRef(() => WorkOrdersService))
     private readonly orders: WorkOrdersService,
   ) {}
@@ -75,7 +80,78 @@ export class WorkOrderStudioRunner {
     return this.orders.get(id);
   }
 
-  /** Drive Bridge stages via `@agent-studio/orchestrator` (no Dify). */
+  /** Best-effort: pull Bridge file bodies into MySQL so GC does not lose content. */
+  private scheduleArtifactCapture(
+    order: WorkOrder,
+    paths: string[],
+    stepId?: string,
+  ) {
+    const runId = (order.run?.run_id || "").trim();
+    const list = (paths || []).map((p) => p.trim()).filter(Boolean);
+    if (!runId || !list.length) return;
+    void this.runLogs
+      .captureArtifactsFromPaths({
+        studio_run_id: runId,
+        work_order_id: order.id,
+        team_id: order.team_id || "",
+        step_id: stepId || "",
+        paths: list,
+      })
+      .then((r) => {
+        if (r.captured > 0) {
+          this.logger.log(
+            `captured ${r.captured} artifact(s) for run ${runId} (skipped ${r.skipped})`,
+          );
+        }
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `artifact capture failed for ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
+  /** Best-effort usage row (tokens optional until drivers emit them). */
+  private scheduleUsageRecord(
+    order: WorkOrder,
+    stageResult: {
+      stage?: string;
+      driver?: string;
+      dryRun?: boolean;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        cost_usd?: number;
+      };
+    } | null | undefined,
+    stepId?: string,
+  ) {
+    if (!stageResult) return;
+    void this.usage
+      .record({
+        team_id: order.team_id || "",
+        work_order_id: order.id,
+        run_id: order.run?.run_id || "",
+        bridge_run_id: order.run?.studio?.bridge_run_id || "",
+        step_id: stepId || "",
+        stage: stageResult.stage || "",
+        driver: stageResult.driver || "",
+        prompt_tokens: stageResult.usage?.prompt_tokens,
+        completion_tokens: stageResult.usage?.completion_tokens,
+        total_tokens: stageResult.usage?.total_tokens,
+        cost_usd: stageResult.usage?.cost_usd,
+        dry_run: Boolean(stageResult.dryRun),
+        detail: stageResult.usage ? { source: "stage_result.usage" } : null,
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `usage record failed for ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
+  /** Drive Bridge stages via `@agent-studio/orchestrator`. */
   async startFromDraft(
     previous: WorkOrder,
     draft: WorkOrder,
@@ -148,6 +224,7 @@ export class WorkOrderStudioRunner {
       action?: string;
       feedback?: string;
     },
+    actor?: { user_id?: string; name?: string },
   ): Promise<WorkOrder> {
     let order = await this.get(id);
     if (
@@ -167,7 +244,34 @@ export class WorkOrderStudioRunner {
       action: decision,
       step_id: order.run?.steps[order.run.current_step_index]?.step_id,
       agent: order.run?.steps[order.run.current_step_index]?.agent,
+      detail: {
+        actor_user_id: actor?.user_id || "",
+        actor_name: actor?.name || "",
+      },
     });
+    void this.audit
+      .record({
+        team_id: order.team_id || "",
+        actor_user_id: actor?.user_id || "",
+        actor_name: actor?.name || "unknown",
+        action:
+          decision === "reject"
+            ? "work_order.reject"
+            : "work_order.approve",
+        resource_type: "work_order",
+        resource_id: order.id,
+        summary: `${decision} · ${order.title || order.id}`,
+        detail: {
+          decision,
+          feedback: body.feedback || "",
+          step_id: order.run?.steps[order.run.current_step_index]?.step_id,
+        },
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `audit decide failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     if (order.run?.studio) {
       order.run.studio.status = "running";
       order.run.studio.pending_human = false;
@@ -433,7 +537,9 @@ export class WorkOrderStudioRunner {
       if (arts.length) {
         const merged = new Set([...(cur.artifact_paths || []), ...arts]);
         cur.artifact_paths = [...merged];
+        this.scheduleArtifactCapture(order, arts, cur.step_id);
       }
+      this.scheduleUsageRecord(order, progress.stage_result, cur.step_id);
     }
     this.appendRunEvent(order, {
       type: "bridge_stage",
@@ -552,7 +658,9 @@ export class WorkOrderStudioRunner {
         if (arts.length) {
           const merged = new Set([...(step.artifact_paths || []), ...arts]);
           step.artifact_paths = [...merged];
+          this.scheduleArtifactCapture(order, arts, step.step_id);
         }
+        this.scheduleUsageRecord(order, outcome.stage_result, step.step_id);
       }
     }
 

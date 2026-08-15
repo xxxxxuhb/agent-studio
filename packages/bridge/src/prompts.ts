@@ -116,7 +116,7 @@ Code-review agent tasks:
 5. If pass (blocker = 0) → YOU must git add / commit / push on the current feature branch (never main/master). Prefer conventional subjects that mention the run id: feat: … (${runId}).
    Use the Bridge-provided git identity (GIT_AUTHOR_* / GIT_COMMITTER_* already in the environment). Do NOT override with a personal name/email.
    Prefer pushing via origin (SSH is configured by Bridge when enabled).
-6. After a successful commit+push, write docs/dify-runs/${runId}/commit-record.md with fields: run_id, committed, sha, branch, pushed, pr_url (- for now), message, note.
+6. After a successful commit+push, write docs/runs/${runId}/commit-record.md with fields: run_id, committed, sha, branch, pushed, pr_url (- for now), message, note.
    Prefer list style (- key: value) so Bridge can parse it; a markdown table is also accepted.
 7. Do NOT open a merge PR/MR — Bridge opens the MR after reading commit-record.md.
 `,
