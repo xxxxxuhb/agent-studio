@@ -53,11 +53,17 @@ export const RunLogMetaSchema = z.object({
   title: z.string().optional().default(""),
   pipeline_id: z.string().optional().default(""),
   pipeline_name: z.string().optional().default(""),
+  /** Orchestrator mode (historically "studio"); Bridge machine is bridge_* below. */
   executor: z.string().optional().default(""),
   project_id: z.string().optional().default(""),
   work_order_status: z.string().optional().default(""),
   bridge_run_id: z.string().optional().default(""),
   bridge_stage: z.string().optional().default(""),
+  /** Registered Bridge executor that executed this run. */
+  bridge_id: z.string().optional().default(""),
+  bridge_name: z.string().optional().default(""),
+  bridge_driver: z.string().optional().default(""),
+  bridge_base_url: z.string().optional().default(""),
   last_error: z.string().optional().default(""),
   started_at: z.string(),
   updated_at: z.string(),

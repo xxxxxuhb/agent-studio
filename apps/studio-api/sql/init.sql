@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS `work_orders` (
   `requirement` text NOT NULL,
   `status` varchar(32) NOT NULL DEFAULT 'draft',
   `pipeline_id` varchar(64) NOT NULL DEFAULT '',
+  `preferred_bridge_id` varchar(64) NOT NULL DEFAULT '',
   `category` varchar(32) NOT NULL DEFAULT 'requirement',
   `priority` varchar(16) NOT NULL DEFAULT 'medium',
   `tags` json NOT NULL,
@@ -107,6 +108,10 @@ CREATE TABLE IF NOT EXISTS `run_logs` (
   `work_order_status` varchar(32) NOT NULL DEFAULT '',
   `bridge_run_id` varchar(64) NOT NULL DEFAULT '',
   `bridge_stage` varchar(64) NOT NULL DEFAULT '',
+  `bridge_id` varchar(64) NOT NULL DEFAULT '',
+  `bridge_name` varchar(128) NOT NULL DEFAULT '',
+  `bridge_driver` varchar(64) NOT NULL DEFAULT '',
+  `bridge_base_url` varchar(512) NOT NULL DEFAULT '',
   `last_error` text NOT NULL,
   `started_at` varchar(40) NOT NULL,
   `updated_at` varchar(40) NOT NULL,
@@ -300,6 +305,40 @@ SET @__sql := IF(
   @__col_exists = 0,
   'ALTER TABLE `bridges` ADD COLUMN `link_type` varchar(16) NOT NULL DEFAULT ''cli'' AFTER `platform`',
   'SELECT ''link_type already present'' AS info'
+);
+PREPARE `__stmt` FROM @__sql;
+EXECUTE `__stmt`;
+DEALLOCATE PREPARE `__stmt`;
+
+-- Upgrade path: work_orders.preferred_bridge_id (pin executor at create/start)
+SET @__col_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'work_orders'
+    AND COLUMN_NAME = 'preferred_bridge_id'
+);
+SET @__sql := IF(
+  @__col_exists = 0,
+  'ALTER TABLE `work_orders` ADD COLUMN `preferred_bridge_id` varchar(64) NOT NULL DEFAULT '''' AFTER `pipeline_id`',
+  'SELECT ''preferred_bridge_id already present'' AS info'
+);
+PREPARE `__stmt` FROM @__sql;
+EXECUTE `__stmt`;
+DEALLOCATE PREPARE `__stmt`;
+
+-- Upgrade path: run_logs bridge executor identity columns
+SET @__col_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'run_logs'
+    AND COLUMN_NAME = 'bridge_id'
+);
+SET @__sql := IF(
+  @__col_exists = 0,
+  'ALTER TABLE `run_logs` ADD COLUMN `bridge_id` varchar(64) NOT NULL DEFAULT '''' AFTER `bridge_stage`, ADD COLUMN `bridge_name` varchar(128) NOT NULL DEFAULT '''' AFTER `bridge_id`, ADD COLUMN `bridge_driver` varchar(64) NOT NULL DEFAULT '''' AFTER `bridge_name`, ADD COLUMN `bridge_base_url` varchar(512) NOT NULL DEFAULT '''' AFTER `bridge_driver`',
+  'SELECT ''run_logs bridge identity columns already present'' AS info'
 );
 PREPARE `__stmt` FROM @__sql;
 EXECUTE `__stmt`;

@@ -441,6 +441,10 @@ export const WorkOrderRunSchema = z.object({
     .object({
       bridge_run_id: z.string().optional().default(""),
       bridge_base_url: z.string().optional().default(""),
+      /** Registered Bridge executor that ran (or will run) this job. */
+      bridge_id: z.string().optional().default(""),
+      bridge_name: z.string().optional().default(""),
+      bridge_driver: z.string().optional().default(""),
       current_stage: z.string().optional().default(""),
       last_summary: z.string().optional().default(""),
       pending_human: z.boolean().optional().default(false),
@@ -460,6 +464,8 @@ export const WorkOrderRunSchema = z.object({
       auto_approve: z.boolean().optional().default(false),
       agents_md_path: z.string().optional(),
       bridge_base_url: z.string().optional(),
+      /** Wait for this registered Bridge when set (else any idle team Bridge). */
+      preferred_bridge_id: z.string().optional().default(""),
       reuse_previous_routing: z.boolean().optional().default(false),
       executor: z.preprocess(
         (v) => {
@@ -489,6 +495,11 @@ export const WorkOrderSchema = z.object({
   pipeline_id: z.string().optional(),
   /** Bound Studio project (multi-repo). */
   project_id: z.string().optional().default(""),
+  /**
+   * Preferred Bridge executor id (`bridges.id`). Empty = auto-pick idle team Bridge.
+   * Honored at start/restart; if that Bridge is busy the work order queues for it.
+   */
+  preferred_bridge_id: z.string().optional().default(""),
   /** Work item kind: feature request / bug / optimization / … */
   category: z
     .enum(["requirement", "bug", "enhancement", "chore", "other"])
@@ -519,6 +530,7 @@ export const WorkOrderCreateSchema = WorkOrderSchema.omit({
   status: WorkOrderStatusSchema.optional().default("draft"),
   pipeline_id: z.string().optional(),
   project_id: z.string().optional().default(""),
+  preferred_bridge_id: z.string().optional().default(""),
 });
 export type WorkOrderCreate = z.infer<typeof WorkOrderCreateSchema>;
 
@@ -542,6 +554,11 @@ export const WorkOrderStartSchema = z.object({
   agents_md_path: z.string().optional(),
   bridge_base_url: z.string().optional(),
   /**
+   * Override work-order preferred Bridge for this start.
+   * Empty / omitted falls back to `WorkOrder.preferred_bridge_id`, then auto-pick.
+   */
+  preferred_bridge_id: z.string().optional(),
+  /**
    * Reuse last run's manager repo plan (skip Bridge /routing/select).
    * Used by restart; first-time start should leave this false.
    */
@@ -562,6 +579,7 @@ export const WorkOrderRestartSchema = z.object({
   auto_approve: z.boolean().optional(),
   agents_md_path: z.string().optional(),
   bridge_base_url: z.string().optional(),
+  preferred_bridge_id: z.string().optional(),
   feedback: z.string().optional(),
   /** When true, call Manager again to pick repos. Default: reuse last plan. */
   reselect_repos: z.boolean().optional().default(false),

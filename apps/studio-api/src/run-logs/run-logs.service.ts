@@ -70,6 +70,10 @@ export class RunLogsService {
       work_order_status: entity.work_order_status || "",
       bridge_run_id: entity.bridge_run_id || "",
       bridge_stage: entity.bridge_stage || "",
+      bridge_id: entity.bridge_id || "",
+      bridge_name: entity.bridge_name || "",
+      bridge_driver: entity.bridge_driver || "",
+      bridge_base_url: entity.bridge_base_url || "",
       last_error: entity.last_error || "",
       started_at: entity.started_at,
       updated_at: entity.updated_at,
@@ -100,6 +104,10 @@ export class RunLogsService {
     bridge_run_id: string;
     bridge_stage: string;
     last_error: string;
+    bridge_id: string;
+    bridge_name: string;
+    bridge_driver: string;
+    bridge_base_url: string;
   } {
     const studio = order.run?.studio;
     const lastBridgeStage = [...(order.run?.events || [])]
@@ -120,6 +128,10 @@ export class RunLogsService {
         ""
       ).trim(),
       last_error: lastError,
+      bridge_id: (studio?.bridge_id || "").trim(),
+      bridge_name: (studio?.bridge_name || "").trim(),
+      bridge_driver: (studio?.bridge_driver || "").trim(),
+      bridge_base_url: (studio?.bridge_base_url || "").trim(),
     };
   }
 
@@ -137,6 +149,10 @@ export class RunLogsService {
       work_order_status: next.work_order_status || "",
       bridge_run_id: next.bridge_run_id || "",
       bridge_stage: next.bridge_stage || "",
+      bridge_id: next.bridge_id || "",
+      bridge_name: next.bridge_name || "",
+      bridge_driver: next.bridge_driver || "",
+      bridge_base_url: next.bridge_base_url || "",
       last_error: next.last_error || "",
       started_at: next.started_at,
       updated_at: next.updated_at,
@@ -164,6 +180,10 @@ export class RunLogsService {
     work_order_status?: string;
     bridge_run_id?: string;
     bridge_stage?: string;
+    bridge_id?: string;
+    bridge_name?: string;
+    bridge_driver?: string;
+    bridge_base_url?: string;
     last_error?: string;
     started_at?: string;
   }): Promise<RunLogMeta> {
@@ -183,6 +203,10 @@ export class RunLogsService {
         meta.work_order_status ?? existing?.work_order_status ?? "",
       bridge_run_id: meta.bridge_run_id ?? existing?.bridge_run_id ?? "",
       bridge_stage: meta.bridge_stage ?? existing?.bridge_stage ?? "",
+      bridge_id: meta.bridge_id ?? existing?.bridge_id ?? "",
+      bridge_name: meta.bridge_name ?? existing?.bridge_name ?? "",
+      bridge_driver: meta.bridge_driver ?? existing?.bridge_driver ?? "",
+      bridge_base_url: meta.bridge_base_url ?? existing?.bridge_base_url ?? "",
       last_error: meta.last_error ?? existing?.last_error ?? "",
       started_at: existing?.started_at || meta.started_at || this.nowIso(),
       updated_at: this.nowIso(),
@@ -225,6 +249,11 @@ export class RunLogsService {
         project_id: order.project_id || existing.project_id,
         bridge_run_id: corr.bridge_run_id || existing.bridge_run_id || "",
         bridge_stage: corr.bridge_stage || existing.bridge_stage || "",
+        bridge_id: corr.bridge_id || existing.bridge_id || "",
+        bridge_name: corr.bridge_name || existing.bridge_name || "",
+        bridge_driver: corr.bridge_driver || existing.bridge_driver || "",
+        bridge_base_url:
+          corr.bridge_base_url || existing.bridge_base_url || "",
         last_error: corr.last_error || existing.last_error || "",
         updated_at: this.nowIso(),
       }),
@@ -371,6 +400,7 @@ export class RunLogsService {
           { ...where, run_id: qRaw },
           { ...where, work_order_id: qRaw },
           { ...where, bridge_run_id: qRaw },
+          { ...where, bridge_id: qRaw },
         ],
       });
       if (exactRows.length) {
@@ -406,6 +436,10 @@ export class RunLogsService {
           (m.pipeline_id || "").toLowerCase().includes(n) ||
           (m.bridge_run_id || "").toLowerCase().includes(n) ||
           (m.bridge_stage || "").toLowerCase().includes(n) ||
+          (m.bridge_id || "").toLowerCase().includes(n) ||
+          (m.bridge_name || "").toLowerCase().includes(n) ||
+          (m.bridge_driver || "").toLowerCase().includes(n) ||
+          (m.bridge_base_url || "").toLowerCase().includes(n) ||
           (m.last_error || "").toLowerCase().includes(n),
       );
     }

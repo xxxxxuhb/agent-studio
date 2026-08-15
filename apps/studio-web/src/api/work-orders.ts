@@ -29,6 +29,7 @@ export const workOrdersApi = {
       auto_approve?: boolean;
       agents_md_path?: string;
       bridge_base_url?: string;
+      preferred_bridge_id?: string;
     },
   ) {
     return post<WorkOrder>(`/work-orders/${id}/start`, body, { timeout: 60_000 });
@@ -41,6 +42,7 @@ export const workOrdersApi = {
       auto_approve?: boolean;
       agents_md_path?: string;
       bridge_base_url?: string;
+      preferred_bridge_id?: string;
       feedback?: string;
       reselect_repos?: boolean;
     } = {},

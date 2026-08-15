@@ -31,6 +31,7 @@ import {
   type WorkOrderRunStep,
   type WorkOrderUpdate,
   type PipelineStep,
+  type BridgeExecutor,
   normalizePipelineGraph,
 } from "@agent-studio/agent-schema";
 import { bridgeStageForAgent } from "@agent-studio/orchestrator";
@@ -88,7 +89,7 @@ export class WorkOrdersService implements OnModuleInit {
 
   onModuleInit() {
     this.bridges.onExecutorIdle((bridge) => {
-      void this.tryAdmitQueued(bridge.team_id || "");
+      void this.tryAdmitQueued(bridge.team_id || "", bridge);
     });
   }
 
@@ -130,6 +131,7 @@ export class WorkOrdersService implements OnModuleInit {
       requirement: entity.requirement,
       status: entity.status,
       pipeline_id: entity.pipeline_id || "",
+      preferred_bridge_id: entity.preferred_bridge_id || "",
       category: entity.category || "requirement",
       priority: entity.priority || "medium",
       tags: entity.tags || [],
@@ -172,6 +174,7 @@ export class WorkOrdersService implements OnModuleInit {
       requirement: order.requirement,
       status: order.status,
       pipeline_id: order.pipeline_id || "",
+      preferred_bridge_id: order.preferred_bridge_id || "",
       category: order.category || "requirement",
       priority: order.priority || "medium",
       tags: order.tags || [],
@@ -778,6 +781,34 @@ export class WorkOrdersService implements OnModuleInit {
   }
 
   /**
+   * Resolve Manager routing for a start (optionally reuse previous plan).
+   * Used by the background prepare job so HTTP start can return immediately.
+   */
+  async resolveStartRouting(
+    order: WorkOrder,
+    opts: {
+      reusePrevious?: boolean;
+      agentsMdPath?: string;
+      bridgeBaseUrl?: string;
+    },
+  ): Promise<ProjectRouting> {
+    let routing: ProjectRouting | null = null;
+    if (opts.reusePrevious) {
+      routing = await this.tryReusePreviousRouting(order, {
+        agentsMdPath: opts.agentsMdPath,
+        bridgeBaseUrl: opts.bridgeBaseUrl,
+      });
+    }
+    if (!routing) {
+      routing = await this.prepareProjectRouting(order, {
+        agentsMdPath: opts.agentsMdPath,
+        bridgeBaseUrl: opts.bridgeBaseUrl,
+      });
+    }
+    return routing;
+  }
+
+  /**
    * Restart fast-path: reuse last run's manager repo plan (no Bridge Cursor call).
    * Still ensures clones exist on the Bridge host. Returns null when nothing usable.
    */
@@ -963,40 +994,57 @@ export class WorkOrdersService implements OnModuleInit {
 
     const executor = "studio" as const;
     const cfg = this.studioConfig.getEffectiveForTeam(order.team_id || "");
+    const preferredBridgeId = (
+      body.preferred_bridge_id !== undefined
+        ? body.preferred_bridge_id
+        : order.preferred_bridge_id || ""
+    ).trim();
     const resolved = await this.bridges.resolveForNewRun({
       teamId: order.team_id,
       override: body.bridge_base_url,
       configured: cfg.bridge_base_url,
+      preferredBridgeId,
     });
     if (!resolved.ok) {
       if (resolved.reason === "busy_pool") {
-        return this.enqueueForBridge(order, body, resolved.message);
+        return this.enqueueForBridge(
+          order,
+          { ...body, preferred_bridge_id: preferredBridgeId || undefined },
+          resolved.message,
+        );
       }
       throw new BadRequestException(resolved.message);
     }
     const bridgePick = {
       studioBaseUrl: resolved.studioBaseUrl,
       registeredBaseUrl: resolved.registeredBaseUrl,
+      bridge: resolved.bridge,
     };
     const studioBridgeBase = resolveStudioBridgeBase({
       override: body.bridge_base_url,
-      registeredBaseUrl: bridgePick.registeredBaseUrl,
+      registeredBaseUrl:
+        bridgePick.registeredBaseUrl || bridgePick.studioBaseUrl,
       configured: cfg.bridge_base_url,
     });
+    const assignedBridge =
+      bridgePick.bridge ||
+      (await this.bridges.findByBaseUrl(studioBridgeBase, order.team_id));
+    const bridgeId = (assignedBridge?.id || preferredBridgeId || "").trim();
+    const bridgeName = (assignedBridge?.name || "").trim();
+    const bridgeDriver = (
+      assignedBridge?.driver ||
+      assignedBridge?.driver_label ||
+      ""
+    ).trim();
 
-    let routing: ProjectRouting | null = null;
-    if (body.reuse_previous_routing) {
-      routing = await this.tryReusePreviousRouting(order, {
-        agentsMdPath: body.agents_md_path,
-        bridgeBaseUrl: body.bridge_base_url || bridgePick.studioBaseUrl,
-      });
-    }
-    if (!routing) {
-      routing = await this.prepareProjectRouting(order, {
-        agentsMdPath: body.agents_md_path,
-        bridgeBaseUrl: body.bridge_base_url || bridgePick.studioBaseUrl,
-      });
-    }
+    // Persist start-time preference onto the work order when explicitly provided.
+    const orderWithPref =
+      body.preferred_bridge_id !== undefined
+        ? WorkOrderSchema.parse({
+            ...order,
+            preferred_bridge_id: preferredBridgeId,
+          })
+        : order;
 
     const stamp = this.nowIso();
     const steps: WorkOrderRunStep[] = pipeline.steps.map((s) =>
@@ -1009,18 +1057,15 @@ export class WorkOrdersService implements OnModuleInit {
       edges: pipeline.edges,
     });
 
-    const repoTargets = (routing.repo_targets || []).map((t, i) => ({
-      ...t,
-      status: i === 0 ? ("running" as const) : ("pending" as const),
-      started_at: i === 0 ? stamp : undefined,
-    }));
-
     const autoApprove = Boolean(body.auto_approve);
 
+    // Return immediately: clone + manager select run in the background job.
     const next = WorkOrderSchema.parse({
-      ...order,
+      ...orderWithPref,
       status: "running",
       pipeline_id: pipeline.id,
+      preferred_bridge_id:
+        orderWithPref.preferred_bridge_id || preferredBridgeId || "",
       run: {
         // 16 hex chars: 8-char prefixes collided and crashed run_logs INSERT.
         run_id: randomUUID().replace(/-/g, "").slice(0, 16),
@@ -1034,42 +1079,58 @@ export class WorkOrdersService implements OnModuleInit {
         edges: graph.edges,
         events: [],
         started_at: stamp,
-        selected_repo_ids: routing.selected_repo_ids,
-        selected_agents_md_path: routing.agents_md_path,
-        manager_routing_reason: routing.manager_routing_reason,
-        repo_targets: repoTargets,
+        selected_repo_ids: [],
+        selected_agents_md_path: "",
+        manager_routing_reason: "",
+        repo_targets: [],
         current_repo_index: 0,
+        studio: {
+          bridge_run_id: "",
+          bridge_base_url: studioBridgeBase,
+          bridge_id: bridgeId,
+          bridge_name: bridgeName,
+          bridge_driver: bridgeDriver,
+          current_stage: "",
+          last_summary: "正在准备仓库…",
+          pending_human: false,
+          dry_run: false,
+          status: "preparing",
+          error: null,
+          last_synced_at: stamp,
+        },
+      },
+    });
+    const bridgeLabel =
+      bridgeName || bridgeId || studioBridgeBase || "unknown";
+    this.appendRunEvent(next, {
+      type: "run_started",
+      message: `启动流水线 ${pipeline.name}（${pipeline.id}）· executor=${executor} · 执行器=${bridgeLabel}${
+        bridgeDriver ? `/${bridgeDriver}` : ""
+      }${autoApprove ? " · 自动确认=开" : ""}`,
+      detail: {
+        pipeline_id: pipeline.id,
+        executor,
+        auto_approve: autoApprove,
+        preferred_bridge_id: preferredBridgeId || undefined,
+        bridge_id: bridgeId || undefined,
+        bridge_name: bridgeName || undefined,
+        bridge_driver: bridgeDriver || undefined,
+        bridge_base_url: studioBridgeBase,
       },
     });
     this.appendRunEvent(next, {
-      type: "run_started",
-      message: `启动流水线 ${pipeline.name}（${pipeline.id}）· executor=${executor}${
-        autoApprove ? " · 自动确认=开" : ""
-      }`,
-      detail: { pipeline_id: pipeline.id, executor, auto_approve: autoApprove },
+      type: "info",
+      message: "后台准备仓库与总管选仓中，页面可查看实时进度",
+      detail: {
+        project_id: order.project_id || "",
+        reuse_previous_routing: Boolean(body.reuse_previous_routing),
+      },
     });
-    if (order.project_id || repoTargets.length) {
-      const orderLabel = repoTargets.length
-        ? repoTargets.map((t, i) => `${i + 1}.${t.repo_id}`).join(" → ")
-        : routing.selected_repo_ids.join(",") || "-";
-      this.appendRunEvent(next, {
-        type: "info",
-        message: `总管改仓计划（按序执行，减少返工）：${orderLabel}`,
-        detail: {
-          project_id: order.project_id,
-          selected_repo_ids: routing.selected_repo_ids,
-          agents_md_path: routing.agents_md_path,
-          reason: routing.manager_routing_reason,
-          routing_mode: routing.routing_mode,
-          repo_targets: repoTargets,
-        },
-      });
-    }
 
-    return this.studioRunner.startFromDraft(order, next, {
-      agents_md_path: routing.agents_md_path,
-      routing_mode: routing.routing_mode,
+    return this.studioRunner.startPreparingThenOrchestrate(orderWithPref, next, {
+      agents_md_path: body.agents_md_path,
       bridge_base_url: studioBridgeBase,
+      reuse_previous_routing: Boolean(body.reuse_previous_routing),
     });
   }
 
@@ -1086,10 +1147,19 @@ export class WorkOrdersService implements OnModuleInit {
   ): Promise<WorkOrder> {
     const stamp = this.nowIso();
     const pipeline = await this.pipelines.get(body.pipeline_id);
+    const preferredBridgeId = (
+      body.preferred_bridge_id !== undefined
+        ? body.preferred_bridge_id
+        : order.preferred_bridge_id || ""
+    ).trim();
     const next = WorkOrderSchema.parse({
       ...order,
       status: "queued",
       pipeline_id: pipeline.id,
+      preferred_bridge_id:
+        body.preferred_bridge_id !== undefined
+          ? preferredBridgeId
+          : order.preferred_bridge_id || "",
       run: {
         run_id: `q-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
         pipeline_id: pipeline.id,
@@ -1105,6 +1175,7 @@ export class WorkOrdersService implements OnModuleInit {
           auto_approve: Boolean(body.auto_approve),
           agents_md_path: body.agents_md_path,
           bridge_base_url: body.bridge_base_url,
+          preferred_bridge_id: preferredBridgeId,
           reuse_previous_routing: Boolean(body.reuse_previous_routing),
           executor: "studio",
           enqueued_at: stamp,
@@ -1116,25 +1187,40 @@ export class WorkOrdersService implements OnModuleInit {
       type: "info",
       level: "warn",
       message: note,
-      detail: { queued: true, pipeline_id: pipeline.id },
+      detail: {
+        queued: true,
+        pipeline_id: pipeline.id,
+        preferred_bridge_id: preferredBridgeId || undefined,
+      },
     });
     this.logger.log(
-      `work-order ${order.id} queued for idle Bridge (team=${order.team_id || "-"})`,
+      `work-order ${order.id} queued for idle Bridge (team=${order.team_id || "-"}${
+        preferredBridgeId ? ` preferred=${preferredBridgeId}` : ""
+      })`,
     );
     return this.write(next);
   }
 
-  /** When a Bridge leaves busy→online, admit the oldest queued work order for that team. */
-  async tryAdmitQueued(teamId: string): Promise<void> {
+  /**
+   * When a Bridge leaves busy→online, admit the oldest queued work order
+   * eligible for that Bridge (or any, if the WO has no preferred_bridge_id).
+   */
+  async tryAdmitQueued(
+    teamId: string,
+    idleBridge?: BridgeExecutor,
+  ): Promise<void> {
     const key = (teamId || "").trim() || "__unscoped__";
     if (this.admitLocks.has(key)) return;
     this.admitLocks.add(key);
     try {
-      const idle = await this.bridges.pickRegisteredBaseUrl({
-        teamId: teamId || undefined,
-        preferIdle: true,
-      });
-      if (!idle) return;
+      const idleId = (idleBridge?.id || "").trim();
+      const idleUrl =
+        (idleBridge?.base_url || "").trim().replace(/\/$/, "") ||
+        (await this.bridges.pickRegisteredBaseUrl({
+          teamId: teamId || undefined,
+          preferIdle: true,
+        }));
+      if (!idleUrl && !idleId) return;
 
       const rows = await this.repo.find({ where: { status: "queued" } });
       const candidates = rows
@@ -1143,8 +1229,20 @@ export class WorkOrdersService implements OnModuleInit {
           if (!(w.run?.pending_start?.pipeline_id || "").trim()) return false;
           const wid = (w.team_id || "").trim();
           const tid = (teamId || "").trim();
-          if (!tid) return !wid;
-          return wid === tid || !wid;
+          if (!tid) {
+            if (wid) return false;
+          } else if (wid !== tid && wid) {
+            return false;
+          }
+          const pref = (
+            w.run?.pending_start?.preferred_bridge_id ||
+            w.preferred_bridge_id ||
+            ""
+          ).trim();
+          // Pinned WO only admits on its preferred Bridge.
+          if (pref && idleId && pref !== idleId) return false;
+          if (pref && !idleId) return false;
+          return true;
         })
         .sort((a, b) => {
           const ae = a.run?.pending_start?.enqueued_at || a.run?.started_at || "";
@@ -1156,7 +1254,9 @@ export class WorkOrdersService implements OnModuleInit {
 
       const pending = next.run.pending_start;
       this.logger.log(
-        `admitting queued work-order ${next.id} on idle Bridge (team=${key})`,
+        `admitting queued work-order ${next.id} on idle Bridge ${
+          idleId || idleUrl || "-"
+        } (team=${key})`,
       );
       try {
         await this.start(next.id, {
@@ -1164,6 +1264,8 @@ export class WorkOrdersService implements OnModuleInit {
           auto_approve: pending.auto_approve,
           agents_md_path: pending.agents_md_path,
           bridge_base_url: pending.bridge_base_url,
+          preferred_bridge_id:
+            pending.preferred_bridge_id || next.preferred_bridge_id || undefined,
           reuse_previous_routing: pending.reuse_previous_routing,
           executor: "studio",
         });
@@ -1223,6 +1325,10 @@ export class WorkOrdersService implements OnModuleInit {
             ),
       agents_md_path: body.agents_md_path,
       bridge_base_url: body.bridge_base_url,
+      preferred_bridge_id:
+        body.preferred_bridge_id !== undefined
+          ? body.preferred_bridge_id
+          : latest.preferred_bridge_id || order.preferred_bridge_id || undefined,
       // Default: reuse last manager plan (skip slow Cursor /routing/select).
       reuse_previous_routing: !body.reselect_repos,
     });
@@ -1286,8 +1392,12 @@ export class WorkOrdersService implements OnModuleInit {
       ? `续跑中…（反馈：${feedback.slice(0, 120)}）`
       : "从失败阶段续跑中…";
     run.studio = {
+      ...run.studio,
       bridge_run_id: bridgeRunId,
       bridge_base_url: bridgeBase,
+      bridge_id: run.studio?.bridge_id || "",
+      bridge_name: run.studio?.bridge_name || "",
+      bridge_driver: run.studio?.bridge_driver || "",
       current_stage: run.studio?.current_stage || "",
       last_summary: step.summary,
       pending_human: false,

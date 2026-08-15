@@ -26,7 +26,14 @@ import {
   StopOutlined,
 } from "@ant-design/icons";
 import { useSearchParams } from "react-router-dom";
-import type { PipelinePublic, Project, WorkOrder, WorkOrderCreate } from "@agent-studio/agent-schema";
+import type {
+  BridgeExecutor,
+  PipelinePublic,
+  Project,
+  WorkOrder,
+  WorkOrderCreate,
+} from "@agent-studio/agent-schema";
+import { bridgesApi } from "../api/bridges";
 import { pipelinesApi } from "../api/pipelines";
 import { projectsApi } from "../api/projects";
 import { workOrdersApi } from "../api/work-orders";
@@ -46,6 +53,7 @@ export function WorkOrdersPage() {
   const [items, setItems] = useState<WorkOrder[]>([]);
   const [pipelines, setPipelines] = useState<PipelinePublic[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [bridges, setBridges] = useState<BridgeExecutor[]>([]);
   const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(deepLinkId || null);
   const [q, setQ] = useState("");
@@ -58,6 +66,8 @@ export function WorkOrdersPage() {
   const [startBusy, setStartBusy] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [pipelineId, setPipelineId] = useState<string>();
+  const [startBridgeId, setStartBridgeId] = useState<string | undefined>();
+  const [restartBridgeId, setRestartBridgeId] = useState<string | undefined>();
   const [autoApprove, setAutoApprove] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [liveStatus, setLiveStatus] = useState<
@@ -70,19 +80,48 @@ export function WorkOrdersPage() {
     [items, selectedId],
   );
 
+  const bridgeOptions = useMemo(
+    () =>
+      bridges.map((b) => ({
+        value: b.id,
+        label: `${b.name || b.id} · ${b.driver || "?"} · ${b.status}`,
+      })),
+    [bridges],
+  );
+
+  const preferredBridgeLabel = useMemo(() => {
+    const id = (selected?.preferred_bridge_id || "").trim();
+    if (!id) return "";
+    const hit = bridges.find((b) => b.id === id);
+    return hit ? `${hit.name || hit.id}` : id;
+  }, [bridges, selected?.preferred_bridge_id]);
+
+  const runBridgeLabel = useMemo(() => {
+    const studio = selected?.run?.studio;
+    if (!studio) return "";
+    const name = (studio.bridge_name || "").trim();
+    const id = (studio.bridge_id || "").trim();
+    const driver = (studio.bridge_driver || "").trim();
+    const base = name || id;
+    if (!base) return "";
+    return driver ? `${base} · ${driver}` : base;
+  }, [selected?.run?.studio]);
+
   async function reload(keepId?: string | null) {
     setLoading(true);
     try {
       const teamId = getSelectedTeam()?.id;
-      const [orders, pipes, projectList] = await Promise.all([
+      const [orders, pipes, projectList, bridgeList] = await Promise.all([
         workOrdersApi.list({ q, status, team_id: teamId }),
         pipelinesApi.list({ enabled: "true", team_id: teamId }),
         projectsApi.list({ enabled: "true", team_id: teamId }),
+        bridgesApi.list({ team_id: teamId }),
       ]);
       setItems(orders.items);
       setTotal(orders.total);
       setPipelines(pipes.items);
       setProjects(projectList.items);
+      setBridges(bridgeList.items || []);
       const nextId = keepId === undefined ? selectedId : keepId;
       if (nextId && !orders.items.some((w) => w.id === nextId)) {
         setSelectedId(null);
@@ -136,6 +175,7 @@ export function WorkOrdersPage() {
       tags: [],
       pipeline_id: pipelines[0]?.id,
       project_id: projects[0]?.id || "",
+      preferred_bridge_id: "",
       team_id: getSelectedTeam()?.id || "",
     });
     setEditorOpen(true);
@@ -152,6 +192,7 @@ export function WorkOrdersPage() {
       tags: order.tags,
       pipeline_id: order.pipeline_id,
       project_id: order.project_id || "",
+      preferred_bridge_id: order.preferred_bridge_id || "",
     });
     setEditorOpen(true);
   }
@@ -168,6 +209,7 @@ export function WorkOrdersPage() {
       const payload: WorkOrderCreate = {
         ...values,
         tags,
+        preferred_bridge_id: values.preferred_bridge_id || "",
         team_id: values.team_id || getSelectedTeam()?.id || "",
       };
       if (editingId) {
@@ -195,12 +237,16 @@ export function WorkOrdersPage() {
         pipeline_id: pipelineId,
         executor: "studio",
         auto_approve: autoApprove,
+        preferred_bridge_id: startBridgeId || "",
       });
       setStartOpen(false);
+      const queued = updated.status === "queued";
       message.success(
-        autoApprove
-          ? "已提交 Studio 编排（自动确认已开）"
-          : "已提交 Studio 编排（Bridge）",
+        queued
+          ? "执行器正忙，已加入排队"
+          : autoApprove
+            ? "已提交，准备与编排在后台进行（自动确认已开）"
+            : "已提交，准备与编排在后台进行",
       );
       await reload(updated.id);
     } catch (err) {
@@ -228,6 +274,7 @@ export function WorkOrdersPage() {
   async function restartRun() {
     if (!selected?.run) return;
     setAutoApprove(Boolean(selected.run.auto_approve));
+    setRestartBridgeId(selected.preferred_bridge_id || undefined);
     setRestartOpen(true);
   }
 
@@ -254,12 +301,16 @@ export function WorkOrdersPage() {
     try {
       const updated = await workOrdersApi.restart(selected.id, {
         auto_approve: autoApprove,
+        preferred_bridge_id: restartBridgeId || "",
       });
       setRestartOpen(false);
+      const queued = updated.status === "queued";
       message.success(
-        autoApprove
-          ? "已重新提交执行（自动确认已开，后台跑阶段）"
-          : "已重新提交执行（后台跑阶段）",
+        queued
+          ? "执行器正忙，已加入排队"
+          : autoApprove
+            ? "已重新提交，准备与编排在后台进行（自动确认已开）"
+            : "已重新提交，准备与编排在后台进行",
       );
       await reload(updated.id);
     } catch (err) {
@@ -410,6 +461,9 @@ export function WorkOrdersPage() {
                       onClick={() => {
                         setPipelineId(selected.pipeline_id || pipelines[0]?.id);
                         setAutoApprove(Boolean(selected.run?.auto_approve));
+                        setStartBridgeId(
+                          selected.preferred_bridge_id || undefined,
+                        );
                         setStartOpen(true);
                       }}
                     >
@@ -507,6 +561,13 @@ export function WorkOrdersPage() {
                   {selected.project_id ? (
                     <Tag color="cyan">项目 {selected.project_id}</Tag>
                   ) : null}
+                  {runBridgeLabel ? (
+                    <Tag color="purple">本次执行器 {runBridgeLabel}</Tag>
+                  ) : preferredBridgeLabel ? (
+                    <Tag color="purple">指定执行器 {preferredBridgeLabel}</Tag>
+                  ) : (
+                    <Tag>执行器 自动分配</Tag>
+                  )}
                   {selected.run?.selected_repo_ids?.length ? (
                     <Tag color="geekblue">
                       选仓 {selected.run.selected_repo_ids.join(",")}
@@ -655,6 +716,17 @@ export function WorkOrdersPage() {
             </Col>
           </Row>
           <Form.Item
+            name="preferred_bridge_id"
+            label="执行器"
+            tooltip="指定后由该 Bridge 执行；忙则排队等待其空闲。留空则自动选择空闲执行器"
+          >
+            <Select
+              allowClear
+              placeholder="自动选择空闲执行器"
+              options={bridgeOptions}
+            />
+          </Form.Item>
+          <Form.Item
             name="project_id"
             label="绑定项目"
             tooltip="启动时会按需克隆仓库，并由总管 Agent 决定改哪个仓"
@@ -690,7 +762,7 @@ export function WorkOrdersPage() {
         cancelButtonProps={{ disabled: startBusy }}
       >
         <Typography.Paragraph type="secondary">
-          将通过 Studio 编排执行（经 Bridge）。
+          将通过 Studio 编排执行（经 Bridge）。绑定了项目时会在后台准备仓库并由总管选仓，启动后可在运行页查看实时进度。
           若工单绑定了项目，启动前会先确保仓库已克隆，再由总管决定改哪个仓。
         </Typography.Paragraph>
         <Form layout="vertical">
@@ -704,6 +776,19 @@ export function WorkOrdersPage() {
                 value: p.id,
                 label: `${p.name} · ${p.steps.length} 步`,
               }))}
+            />
+          </Form.Item>
+          <Form.Item
+            label="执行器"
+            extra="指定后固定用该执行器；忙则排队。留空自动分配空闲执行器"
+          >
+            <Select
+              allowClear
+              style={{ width: "100%" }}
+              placeholder="自动选择空闲执行器"
+              value={startBridgeId}
+              onChange={(v) => setStartBridgeId(v || undefined)}
+              options={bridgeOptions}
             />
           </Form.Item>
           <Form.Item
@@ -735,6 +820,19 @@ export function WorkOrdersPage() {
           {selected?.run?.pipeline_id || "-"}（Studio 编排）。默认复用上次总管选仓（不再重新选仓）。确认后立即返回，阶段在后台执行。
         </Typography.Paragraph>
         <Form layout="vertical">
+          <Form.Item
+            label="执行器"
+            extra="可改选执行器；忙则排队等待该执行器空闲"
+          >
+            <Select
+              allowClear
+              style={{ width: "100%" }}
+              placeholder="自动选择空闲执行器"
+              value={restartBridgeId}
+              onChange={(v) => setRestartBridgeId(v || undefined)}
+              options={bridgeOptions}
+            />
+          </Form.Item>
           <Form.Item
             label="自动确认"
             extra="流水线人工确认节点保留；开启后由 Studio 代为点「通过」，无需手动确认"

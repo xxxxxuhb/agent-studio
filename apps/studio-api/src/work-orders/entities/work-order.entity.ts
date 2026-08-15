@@ -33,6 +33,10 @@ export class WorkOrderEntity {
   @Column({ type: "varchar", length: 64, default: "" })
   pipeline_id!: string;
 
+  /** Preferred Bridge executor id; empty = auto-pick. */
+  @Column({ type: "varchar", length: 64, default: "" })
+  preferred_bridge_id!: string;
+
   @Column({ type: "varchar", length: 32, default: "requirement" })
   category!: string;
 

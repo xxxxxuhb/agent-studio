@@ -208,29 +208,95 @@ export class BridgesService implements OnModuleInit {
   /**
    * Resolve Bridge URL for a new work-order start.
    * Prefer idle registered executors; report busy_pool when the team only has busy hosts.
+   * When preferredBridgeId is set, pin to that executor (queue if busy).
    */
   async resolveForNewRun(opts?: {
     teamId?: string;
     override?: string;
     configured?: string;
+    preferredBridgeId?: string;
   }): Promise<
-    | { ok: true; studioBaseUrl: string; registeredBaseUrl?: string }
+    | {
+        ok: true;
+        studioBaseUrl: string;
+        registeredBaseUrl?: string;
+        bridge?: BridgeExecutor;
+      }
     | { ok: false; reason: "busy_pool" | "unreachable"; message: string }
   > {
     const override = (opts?.override || "").trim().replace(/\/$/, "");
     if (override) {
-      return { ok: true, studioBaseUrl: override };
+      const matched = await this.findByBaseUrl(override, opts?.teamId);
+      return {
+        ok: true,
+        studioBaseUrl: override,
+        registeredBaseUrl: matched?.base_url?.replace(/\/$/, "") || undefined,
+        bridge: matched,
+      };
     }
 
-    const idleUrl = await this.pickRegisteredBaseUrl({
+    const preferredId = (opts?.preferredBridgeId || "").trim();
+    if (preferredId) {
+      let bridge: BridgeExecutor;
+      try {
+        bridge = await this.get(preferredId);
+      } catch {
+        return {
+          ok: false,
+          reason: "unreachable",
+          message: `指定的执行器不存在：${preferredId}`,
+        };
+      }
+      const teamId = (opts?.teamId || "").trim();
+      const bridgeTeam = (bridge.team_id || "").trim();
+      if (teamId && bridgeTeam && bridgeTeam !== teamId) {
+        return {
+          ok: false,
+          reason: "unreachable",
+          message: `指定的执行器不属于当前团队：${bridge.name || preferredId}`,
+        };
+      }
+      const base = (bridge.base_url || "").trim().replace(/\/$/, "");
+      if (!base) {
+        return {
+          ok: false,
+          reason: "unreachable",
+          message: `指定的执行器未配置 base_url：${bridge.name || preferredId}`,
+        };
+      }
+      if (bridge.status === "online") {
+        return {
+          ok: true,
+          studioBaseUrl: base,
+          registeredBaseUrl: base,
+          bridge,
+        };
+      }
+      if (bridge.status === "busy") {
+        return {
+          ok: false,
+          reason: "busy_pool",
+          message: `执行器「${bridge.name || preferredId}」正在执行中，工单将排队等待其空闲`,
+        };
+      }
+      return {
+        ok: false,
+        reason: "unreachable",
+        message: `指定的执行器不可用（状态 ${bridge.status}）：${bridge.name || preferredId}`,
+      };
+    }
+
+    const idle = await this.pickRegisteredExecutor({
       teamId: opts?.teamId,
       preferIdle: true,
     });
-    if (idleUrl) {
+    if (idle?.base_url?.trim()) {
+      const idleUrl = idle.base_url.replace(/\/$/, "");
       return {
         ok: true,
         studioBaseUrl: idleUrl,
         registeredBaseUrl: idleUrl,
+        bridge: idle,
       };
     }
 
@@ -273,7 +339,34 @@ export class BridgesService implements OnModuleInit {
           "配置的 Bridge 正忙，工单将排队等待空闲（也可稍后点「重新执行」）",
       };
     }
-    return { ok: true, studioBaseUrl: configured };
+    const matched = await this.findByBaseUrl(configured, opts?.teamId);
+    return {
+      ok: true,
+      studioBaseUrl: configured,
+      bridge: matched,
+    };
+  }
+
+  /** Match a registered executor by normalized base_url (optional team scope). */
+  async findByBaseUrl(
+    baseUrl: string,
+    teamId?: string,
+  ): Promise<BridgeExecutor | undefined> {
+    const target = (baseUrl || "").trim().replace(/\/$/, "");
+    if (!target) return undefined;
+    const tid = (teamId || "").trim();
+    const all = await this.list();
+    const matches = all.filter(
+      (b) => (b.base_url || "").trim().replace(/\/$/, "") === target,
+    );
+    if (!matches.length) return undefined;
+    if (tid) {
+      const exact = matches.find((b) => (b.team_id || "").trim() === tid);
+      if (exact) return exact;
+      const unscoped = matches.find((b) => !(b.team_id || "").trim());
+      if (unscoped) return unscoped;
+    }
+    return matches[0];
   }
 
   /**

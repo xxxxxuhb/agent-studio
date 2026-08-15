@@ -942,6 +942,60 @@ body {
   color: rgba(0, 0, 0, 0.75);
 }
 
+.run-trace-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.run-trace-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid #e8ecf2;
+  border-radius: 999px;
+  background: #fafbfc;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.run-trace-chip__idx {
+  flex: 0 0 auto;
+  min-width: 16px;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+}
+
+.run-trace-chip.is-finish {
+  border-color: #d9f7be;
+  background: #f6ffed;
+}
+
+.run-trace-chip.is-process {
+  border-color: #91caff;
+  background: #e6f4ff;
+  font-weight: 500;
+}
+
+.run-trace-chip.is-error {
+  border-color: #ffccc7;
+  background: #fff2f0;
+  color: #cf1322;
+}
+
+.run-trace-chip.is-more {
+  border-style: dashed;
+  color: rgba(0, 0, 0, 0.45);
+}
+
 .wo-run-approval {
   border-color: #ffe58f;
   background: #fffbe6;

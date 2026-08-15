@@ -8,9 +8,9 @@ import {
   List,
   Select,
   Space,
-  Steps,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -61,6 +61,66 @@ function traceStepStatus(
   if (step.level === "warn" || step.kind === "warn") return "error";
   if (isLast && step.kind !== "run_finished") return "process";
   return "finish";
+}
+
+/** Compact wrapping trace strip: vertical Steps ate most of the detail pane. */
+function RunTraceStrip({ trace }: { trace: RunLogTraceStep[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const COLLAPSED_COUNT = 10;
+  const hasError = trace.some(
+    (s, i) => traceStepStatus(s, i === trace.length - 1) === "error",
+  );
+  const shown = expanded ? trace : trace.slice(-COLLAPSED_COUNT);
+  const hiddenCount = trace.length - shown.length;
+
+  return (
+    <Card
+      size="small"
+      type="inner"
+      title="运行轨迹（Studio → Bridge）"
+      extra={
+        <Space size={8}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {trace.length} 步
+          </Typography.Text>
+          {hasError ? <Tag color="red">有失败</Tag> : null}
+          {trace.length > COLLAPSED_COUNT ? (
+            <Button
+              type="link"
+              size="small"
+              style={{ paddingInline: 0 }}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? "收起" : `展开全部`}
+            </Button>
+          ) : null}
+        </Space>
+      }
+    >
+      <div className="run-trace-strip">
+        {hiddenCount > 0 ? (
+          <span className="run-trace-chip is-more">前 {hiddenCount} 步已折叠</span>
+        ) : null}
+        {shown.map((step, idx) => {
+          const globalIdx = expanded ? idx : trace.length - shown.length + idx;
+          const status = traceStepStatus(step, globalIdx === trace.length - 1);
+          return (
+            <Tooltip
+              key={`${step.at}-${globalIdx}`}
+              title={`${step.kind}${
+                step.at ? ` · ${new Date(step.at).toLocaleString()}` : ""
+              }`}
+            >
+              <span className={`run-trace-chip is-${status}`}>
+                <span className="run-trace-chip__idx">{globalIdx + 1}</span>
+                {step.label}
+              </span>
+            </Tooltip>
+          );
+        })}
+      </div>
+    </Card>
+  );
 }
 
 export function RunLogsPage() {
@@ -233,6 +293,13 @@ export function RunLogsPage() {
                             {item.pipeline_name || item.pipeline_id || "-"} ·{" "}
                             {item.entry_count} 条
                           </span>
+                          {item.bridge_name || item.bridge_id || item.bridge_driver ? (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              执行器{" "}
+                              {item.bridge_name || item.bridge_id || "-"}
+                              {item.bridge_driver ? ` · ${item.bridge_driver}` : ""}
+                            </Typography.Text>
+                          ) : null}
                           {item.bridge_run_id ? (
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                               {`Bridge ${item.bridge_run_id}`}
@@ -314,7 +381,14 @@ export function RunLogsPage() {
                   {selected.project_id ? (
                     <Tag color="cyan">项目 {selected.project_id}</Tag>
                   ) : null}
-                  {selected.executor ? <Tag>{selected.executor}</Tag> : null}
+                  {selected.bridge_name || selected.bridge_id ? (
+                    <Tag color="purple">
+                      执行器 {selected.bridge_name || selected.bridge_id}
+                      {selected.bridge_driver ? ` · ${selected.bridge_driver}` : ""}
+                    </Tag>
+                  ) : selected.executor ? (
+                    <Tag>{selected.executor}</Tag>
+                  ) : null}
                   {(selected.sources || []).map((s) => (
                     <Tag key={s} color={SOURCE_COLOR[s]}>
                       {SOURCE_LABEL[s]}
@@ -335,6 +409,17 @@ export function RunLogsPage() {
                         {selected.run_id}
                       </Typography.Text>
                     </Typography.Text>
+                    {selected.bridge_id ? (
+                      <Typography.Text>
+                        执行器{" "}
+                        <Typography.Text code copyable>
+                          {selected.bridge_id}
+                        </Typography.Text>
+                        {selected.bridge_base_url
+                          ? ` · ${selected.bridge_base_url}`
+                          : ""}
+                      </Typography.Text>
+                    ) : null}
                     {selected.bridge_run_id ? (
                       <Typography.Text>
                         Bridge{" "}
@@ -357,24 +442,7 @@ export function RunLogsPage() {
                   ) : null}
                 </Space>
 
-                {trace.length ? (
-                  <Card size="small" type="inner" title="运行轨迹（Studio → Bridge）">
-                    <Steps
-                      size="small"
-                      direction="vertical"
-                      items={trace.map((step, idx) => ({
-                        title: step.label,
-                        description: (
-                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            {step.kind}
-                            {step.at ? ` · ${new Date(step.at).toLocaleString()}` : ""}
-                          </Typography.Text>
-                        ),
-                        status: traceStepStatus(step, idx === trace.length - 1),
-                      }))}
-                    />
-                  </Card>
-                ) : null}
+                {trace.length ? <RunTraceStrip trace={trace} /> : null}
 
                 <Tabs
                   items={[

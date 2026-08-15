@@ -8,11 +8,10 @@ import {
   Spin,
   Tag,
   Typography,
-  message,
 } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { runLogsApi, type RunArtifactListItem } from "../api/run-logs";
-import { AgentOutputView } from "./AgentOutputView";
+import { ArtifactDocModal } from "./LiveEventMessage";
 
 type Props = {
   /** Studio run_id (not Bridge run id). */
@@ -29,10 +28,7 @@ export function RunArtifactsPanel({
 }: Props) {
   const [items, setItems] = useState<RunArtifactListItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [content, setContent] = useState<string>("");
-  const [contentSource, setContentSource] = useState<string>("");
-  const [contentLoading, setContentLoading] = useState(false);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [hint, setHint] = useState<string>("");
   const [storedCount, setStoredCount] = useState(0);
 
@@ -66,26 +62,8 @@ export function RunArtifactsPanel({
     }
   }
 
-  async function openArtifact(name: string) {
-    setSelected(name);
-    setContentLoading(true);
-    setContentSource("");
-    try {
-      const res = await runLogsApi.readArtifact(runId, name);
-      setContent(res.content || "");
-      setContentSource(res.source || "");
-    } catch (err) {
-      setContent("");
-      message.error(err instanceof Error ? err.message : String(err));
-    } finally {
-      setContentLoading(false);
-    }
-  }
-
   useEffect(() => {
-    setSelected(null);
-    setContent("");
-    setContentSource("");
+    setPreviewPath(null);
     void reloadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
@@ -157,7 +135,7 @@ export function RunArtifactsPanel({
                       <Button
                         type="link"
                         size="small"
-                        onClick={() => void openArtifact(base)}
+                        onClick={() => setPreviewPath(path)}
                       >
                         打开
                       </Button>
@@ -180,23 +158,27 @@ export function RunArtifactsPanel({
             dataSource={items}
             renderItem={(item) => (
               <List.Item
-                style={{
-                  cursor: "pointer",
-                  background: item.name === selected ? "#f5f5f5" : undefined,
-                }}
-                onClick={() => void openArtifact(item.name)}
+                style={{ cursor: "pointer" }}
+                onClick={() => setPreviewPath(item.name)}
               >
-                <Space wrap>
-                  <Typography.Text code>{item.name}</Typography.Text>
-                  {item.source === "stored" ? (
-                    <Tag color="blue">入库</Tag>
-                  ) : item.source === "bridge" ? (
-                    <Tag>Bridge</Tag>
-                  ) : null}
-                  {item.role ? <Tag>{item.role}</Tag> : null}
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {item.bytes} B · {new Date(item.updated_at).toLocaleString()}
-                  </Typography.Text>
+                <Space
+                  wrap
+                  style={{ width: "100%", justifyContent: "space-between" }}
+                >
+                  <Space wrap>
+                    <Typography.Text code>{item.name}</Typography.Text>
+                    {item.source === "stored" ? (
+                      <Tag color="blue">入库</Tag>
+                    ) : item.source === "bridge" ? (
+                      <Tag>Bridge</Tag>
+                    ) : null}
+                    {item.role ? <Tag>{item.role}</Tag> : null}
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {item.bytes} B ·{" "}
+                      {new Date(item.updated_at).toLocaleString()}
+                    </Typography.Text>
+                  </Space>
+                  <Typography.Link>查看</Typography.Link>
                 </Space>
               </List.Item>
             )}
@@ -206,23 +188,12 @@ export function RunArtifactsPanel({
         ) : null}
       </Spin>
 
-      {selected ? (
-        <Spin spinning={contentLoading}>
-          <Space style={{ marginBottom: 8 }}>
-            <Typography.Text strong>{selected}</Typography.Text>
-            {contentSource === "stored" ? (
-              <Tag color="blue">来自入库</Tag>
-            ) : contentSource === "bridge" ? (
-              <Tag>来自 Bridge</Tag>
-            ) : null}
-          </Space>
-          {content ? (
-            <AgentOutputView output={content} maxHeight={420} />
-          ) : !contentLoading ? (
-            <Empty description="空文件" />
-          ) : null}
-        </Spin>
-      ) : null}
+      <ArtifactDocModal
+        open={Boolean(previewPath)}
+        path={previewPath}
+        runId={runId}
+        onClose={() => setPreviewPath(null)}
+      />
     </Space>
   );
 }

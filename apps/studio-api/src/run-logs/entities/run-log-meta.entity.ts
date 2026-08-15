@@ -44,6 +44,18 @@ export class RunLogMetaEntity {
   @Column({ type: "varchar", length: 64, default: "" })
   bridge_stage!: string;
 
+  @Column({ type: "varchar", length: 64, default: "" })
+  bridge_id!: string;
+
+  @Column({ type: "varchar", length: 128, default: "" })
+  bridge_name!: string;
+
+  @Column({ type: "varchar", length: 64, default: "" })
+  bridge_driver!: string;
+
+  @Column({ type: "varchar", length: 512, default: "" })
+  bridge_base_url!: string;
+
   @Column({ type: "text", default: "" })
   last_error!: string;
 

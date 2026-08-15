@@ -72,10 +72,20 @@ function bannerTitle(
   order: WorkOrder,
   currentStep: WorkOrderRunStep | undefined,
 ): string {
+  const studio = order.run?.studio;
+  const preparing =
+    studio?.status === "preparing" ||
+    (studio?.status === "starting" && !(studio.bridge_run_id || "").trim());
+
   switch (order.status) {
     case "queued":
       return "排队等待空闲 Bridge";
     case "running":
+      if (preparing) {
+        return studio?.status === "preparing"
+          ? "准备中：克隆仓库 / 总管选仓"
+          : "准备完成，正在启动编排";
+      }
       if (!currentStep || currentStep.status === "pending") {
         return "正在启动流水线";
       }
@@ -132,18 +142,25 @@ function WorkOrderRunPanelBody({
   const latestEvent = events.length ? events[events.length - 1] : undefined;
   const recentEvents = [...events].reverse().slice(0, 40);
   const bridgeRunId = studio?.bridge_run_id || undefined;
+  const preparing =
+    studio?.status === "preparing" ||
+    (studio?.status === "starting" && !bridgeRunId);
   const canResume =
     order.status === "failed" && Boolean(bridgeRunId) && Boolean(onResume);
 
-  const detailText =
-    (studio?.error || "").trim() ||
-    (currentStep?.summary || "").trim() ||
-    (studio?.last_summary || "").trim() ||
-    (latestEvent?.message || "").trim() ||
-    (order.status === "queued"
-      ? run.pending_start?.note ||
-        "团队 Bridge 忙碌，工单排队中；空闲后将自动启动。"
-      : "");
+  // While preparing, prefer live last_summary / events over empty step text.
+  const detailText = preparing
+    ? (studio?.last_summary || "").trim() ||
+      (latestEvent?.message || "").trim() ||
+      "正在准备仓库与总管选仓…"
+    : (studio?.error || "").trim() ||
+      (currentStep?.summary || "").trim() ||
+      (studio?.last_summary || "").trim() ||
+      (latestEvent?.message || "").trim() ||
+      (order.status === "queued"
+        ? run.pending_start?.note ||
+          "团队 Bridge 忙碌，工单排队中；空闲后将自动启动。"
+        : "");
 
   const outputStep =
     [...run.steps].reverse().find((s) => s.output?.trim()) || currentStep;
@@ -275,6 +292,26 @@ function WorkOrderRunPanelBody({
               日志
             </Button>
           </Link>
+          {studio?.bridge_id || studio?.bridge_name ? (
+            <>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                执行器
+              </Typography.Text>
+              <Typography.Text style={{ fontSize: 12 }}>
+                {studio.bridge_name || studio.bridge_id}
+                {studio.bridge_driver ? ` · ${studio.bridge_driver}` : ""}
+              </Typography.Text>
+              {studio.bridge_id ? (
+                <Typography.Text
+                  code
+                  copyable={{ text: studio.bridge_id }}
+                  style={{ fontSize: 12 }}
+                >
+                  {studio.bridge_id}
+                </Typography.Text>
+              ) : null}
+            </>
+          ) : null}
           {bridgeRunId ? (
             <>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -354,6 +391,17 @@ function WorkOrderRunPanelBody({
             {STATUS_LABEL[order.status]?.text || order.status}
           </Tag>
           <Tag color="cyan">Studio 编排</Tag>
+          {studio?.bridge_name || studio?.bridge_id ? (
+            <Tag color="purple">
+              {studio.bridge_name || studio.bridge_id}
+              {studio.bridge_driver ? ` · ${studio.bridge_driver}` : ""}
+            </Tag>
+          ) : null}
+          {preparing ? (
+            <Tag color="orange">
+              {studio?.status === "preparing" ? "准备中" : "启动编排中"}
+            </Tag>
+          ) : null}
           {stepTotal > 0 ? (
             <Tag>
               步骤 {stepIndex}/{stepTotal}
@@ -739,6 +787,16 @@ function ApprovalCard({
       {!showChecklist ? (
         <Typography.Paragraph>
           当前步骤：{currentStep.label || currentStep.step_id}（{currentStep.agent}）
+          {studio?.bridge_name || studio?.bridge_id ? (
+            <>
+              {" "}
+              · 执行器{" "}
+              <Typography.Text>
+                {studio.bridge_name || studio.bridge_id}
+                {studio.bridge_driver ? ` · ${studio.bridge_driver}` : ""}
+              </Typography.Text>
+            </>
+          ) : null}
           {studio?.bridge_run_id ? (
             <>
               {" "}

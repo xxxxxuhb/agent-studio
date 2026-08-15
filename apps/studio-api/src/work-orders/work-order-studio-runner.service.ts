@@ -152,6 +152,162 @@ export class WorkOrderStudioRunner {
       });
   }
 
+  /**
+   * Fast HTTP return: persist preparing run, then in background
+   * ensure repos + Manager select, then orchestrate Bridge stages.
+   */
+  async startPreparingThenOrchestrate(
+    previous: WorkOrder,
+    draft: WorkOrder,
+    opts: {
+      agents_md_path?: string;
+      bridge_base_url?: string;
+      reuse_previous_routing?: boolean;
+    },
+  ): Promise<WorkOrder> {
+    void previous;
+    if (!draft.run) throw new BadRequestException("run missing");
+    const bridgeBase =
+      (opts.bridge_base_url || "").trim() ||
+      draft.run.studio?.bridge_base_url ||
+      "http://127.0.0.1:8787";
+    const saved = await this.write(draft);
+    const runId = saved.run!.run_id;
+
+    this.enqueueJob(saved.id, runId, async (order) => {
+      try {
+        if (order.run?.studio) {
+          order.run.studio.status = "preparing";
+          order.run.studio.last_summary = "正在 Bridge 上准备仓库…";
+          order.run.studio.last_synced_at = this.nowIso();
+        }
+        this.appendRunEvent(order, {
+          type: "info",
+          message: "正在 Bridge 上准备仓库 / 总管选仓…",
+        });
+        await this.write(order);
+
+        const routing = await this.orders.resolveStartRouting(order, {
+          reusePrevious: Boolean(opts.reuse_previous_routing),
+          agentsMdPath: opts.agents_md_path,
+          bridgeBaseUrl: bridgeBase,
+        });
+
+        let latest = await this.get(order.id);
+        if (latest.run?.run_id !== runId) return;
+        if (!latest.run) return;
+
+        const stamp = this.nowIso();
+        const repoTargets = (routing.repo_targets || []).map((t, i) => ({
+          ...t,
+          status: i === 0 ? ("running" as const) : ("pending" as const),
+          started_at: i === 0 ? stamp : undefined,
+        }));
+        latest.run.selected_repo_ids = routing.selected_repo_ids;
+        latest.run.selected_agents_md_path = routing.agents_md_path;
+        latest.run.manager_routing_reason = routing.manager_routing_reason;
+        latest.run.repo_targets = repoTargets;
+        latest.run.current_repo_index = 0;
+        if (latest.run.studio) {
+          latest.run.studio.status = "starting";
+          latest.run.studio.bridge_base_url =
+            latest.run.studio.bridge_base_url || bridgeBase;
+          latest.run.studio.last_summary = "总管选仓完成，启动编排…";
+          latest.run.studio.last_synced_at = stamp;
+          latest.run.studio.error = null;
+        }
+
+        if (latest.project_id || repoTargets.length) {
+          const orderLabel = repoTargets.length
+            ? repoTargets.map((t, i) => `${i + 1}.${t.repo_id}`).join(" → ")
+            : routing.selected_repo_ids.join(",") || "-";
+          this.appendRunEvent(latest, {
+            type: "info",
+            message: `总管改仓计划（按序执行，减少返工）：${orderLabel}`,
+            detail: {
+              project_id: latest.project_id,
+              selected_repo_ids: routing.selected_repo_ids,
+              agents_md_path: routing.agents_md_path,
+              reason: routing.manager_routing_reason,
+              routing_mode: routing.routing_mode,
+              repo_targets: repoTargets,
+            },
+          });
+        }
+
+        const first = latest.run.steps[0];
+        if (first && first.status === "pending") {
+          first.status = "running";
+          first.started_at = stamp;
+        }
+        this.appendRunEvent(latest, {
+          type: "info",
+          message: "Studio 编排已提交（后台执行 Bridge 阶段，页面可刷新查看进度）",
+        });
+        latest = await this.write(latest);
+        if (!latest.run || latest.run.run_id !== runId) return;
+
+        const humans = await this.humans.list({ enabled: "all" });
+        const agentsMdPath =
+          routing.agents_md_path || opts.agents_md_path || "auto";
+        const autoApprove = Boolean(latest.run.auto_approve);
+        const outcome = await runStudioStart({
+          order: latest,
+          bridgeBaseUrl: bridgeBase,
+          agentsMdPath,
+          routingMode: routing.routing_mode,
+          humans,
+          autoApprove,
+          onProgress: async (progress) => {
+            await this.persistProgress(
+              latest.id,
+              runId,
+              progress,
+              bridgeBase,
+            );
+          },
+        });
+        const after = await this.get(order.id);
+        if (after.run?.run_id !== runId) return;
+        await this.applyOutcome(after, outcome, bridgeBase);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const latest = await this.get(order.id);
+        if (!latest.run || latest.run.run_id !== runId) return;
+        const stamp = this.nowIso();
+        latest.status = "failed";
+        latest.run.finished_at = stamp;
+        latest.run.active_step_indices = [];
+        if (latest.run.studio) {
+          latest.run.studio.status = "failed";
+          latest.run.studio.error = msg;
+          latest.run.studio.last_summary = msg;
+          latest.run.studio.pending_human = false;
+          latest.run.studio.last_synced_at = stamp;
+        }
+        const step = latest.run.steps[latest.run.current_step_index];
+        if (step) {
+          step.status = "failed";
+          step.summary = msg;
+          step.finished_at = stamp;
+        }
+        this.appendRunEvent(latest, {
+          type: "sync_error",
+          level: "error",
+          message: `准备失败：${msg}`,
+        });
+        this.appendRunEvent(latest, {
+          type: "run_finished",
+          level: "error",
+          message: `运行结束：failed · ${msg}`,
+        });
+        await this.write(latest);
+      }
+    });
+
+    return saved;
+  }
+
   /** Drive Bridge stages via `@agent-studio/orchestrator`. */
   async startFromDraft(
     previous: WorkOrder,
@@ -173,8 +329,12 @@ export class WorkOrderStudioRunner {
     const autoApprove = Boolean(draft.run.auto_approve);
 
     draft.run.studio = {
+      ...draft.run.studio,
       bridge_run_id: draft.run.studio?.bridge_run_id || "",
       bridge_base_url: bridgeBase,
+      bridge_id: draft.run.studio?.bridge_id || "",
+      bridge_name: draft.run.studio?.bridge_name || "",
+      bridge_driver: draft.run.studio?.bridge_driver || "",
       current_stage: draft.run.studio?.current_stage || "",
       last_summary: "Studio 编排启动中…",
       pending_human: false,
@@ -439,8 +599,12 @@ export class WorkOrderStudioRunner {
     const waiting = progress.state.status === "waiting";
     order.status = waiting ? "waiting" : "running";
     order.run.studio = {
+      ...order.run.studio,
       bridge_run_id: state.bridge_run_id || "",
       bridge_base_url: state.bridge_base_url || bridgeBaseUrl,
+      bridge_id: order.run.studio?.bridge_id || "",
+      bridge_name: order.run.studio?.bridge_name || "",
+      bridge_driver: order.run.studio?.bridge_driver || "",
       current_stage: progress.stage || state.current_stage || "",
       last_summary: progress.summary || state.last_summary || "",
       pending_human: false,
@@ -629,8 +793,12 @@ export class WorkOrderStudioRunner {
     const stamp = this.nowIso();
     const state = studioStateFromOutcome(outcome, bridgeBaseUrl);
     order.run.studio = {
+      ...order.run.studio,
       bridge_run_id: state.bridge_run_id || "",
       bridge_base_url: state.bridge_base_url || bridgeBaseUrl,
+      bridge_id: order.run.studio?.bridge_id || "",
+      bridge_name: order.run.studio?.bridge_name || "",
+      bridge_driver: order.run.studio?.bridge_driver || "",
       current_stage: state.current_stage || "",
       last_summary: isTransientSummary(state.last_summary)
         ? ""
