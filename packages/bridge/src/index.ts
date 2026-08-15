@@ -33,4 +33,5 @@ export {
   ensureWorkspaceOnBridge,
   bridgeReposRoot,
   resolveBridgeRepoPath,
+  resolveBridgeRepoLocalPath,
 } from "./workspaceEnsure.js";

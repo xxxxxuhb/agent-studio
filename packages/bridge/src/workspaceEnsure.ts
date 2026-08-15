@@ -14,11 +14,14 @@ const execFileAsync = promisify(execFile);
 
 export type WorkspaceEnsureRepoInput = {
   id: string;
-  remote_url: string;
+  remote_url?: string;
+  /** Absolute or project-relative path on the Bridge host; empty → default layout. */
+  local_path?: string;
   name?: string;
   role?: string;
   default_branch?: string;
   note?: string;
+  agents_md?: string;
 };
 
 export type WorkspaceEnsureRepoResult = {
@@ -54,6 +57,23 @@ export function bridgeReposRoot(): string {
 
 export function resolveBridgeRepoPath(projectId: string, repoId: string): string {
   return path.join(bridgeReposRoot(), projectId, repoId);
+}
+
+/**
+ * Prefer an explicit local_path (absolute or relative to project dir under repos root).
+ * Empty → `{BRIDGE_REPOS_DIR}/{projectId}/{repoId}`.
+ */
+export function resolveBridgeRepoLocalPath(
+  projectId: string,
+  repo: Pick<WorkspaceEnsureRepoInput, "id" | "local_path">,
+): string {
+  const raw = expandHome((repo.local_path || "").trim());
+  if (raw) {
+    return path.isAbsolute(raw)
+      ? path.resolve(raw)
+      : path.join(bridgeReposRoot(), projectId, raw);
+  }
+  return resolveBridgeRepoPath(projectId, repo.id);
 }
 
 function resolveCloneRemoteUrl(remoteUrl: string): string {
@@ -128,7 +148,11 @@ function ensureAgentsMdForLocal(opts: {
   repo: WorkspaceEnsureRepoInput;
   local: string;
 }): string {
-  const agentsMd = path.join(opts.local, "AGENTS.md");
+  const rel = ((opts.repo.agents_md || "").trim() || "AGENTS.md").replace(
+    /^[/\\]+/,
+    "",
+  );
+  const agentsMd = path.join(opts.local, rel);
   if (!fs.existsSync(agentsMd)) {
     writeMinimalAgentsMd({
       agentsMdPath: agentsMd,
@@ -190,23 +214,20 @@ async function ensureOneRepo(opts: {
   repo: WorkspaceEnsureRepoInput;
 }): Promise<WorkspaceEnsureRepoResult> {
   const { projectId, projectName, repo } = opts;
-  const local = resolveBridgeRepoPath(projectId, repo.id);
+  const local = resolveBridgeRepoLocalPath(projectId, repo);
   const remote = (repo.remote_url || "").trim();
+  const configuredLocal = (repo.local_path || "").trim();
   const base: WorkspaceEnsureRepoResult = {
     id: repo.id,
     name: repo.name || repo.id,
     role: repo.role || "unknown",
     remote_url: remote,
     local_path: local,
-    agents_md_path: path.join(local, "AGENTS.md"),
+    agents_md_path: path.join(local, (repo.agents_md || "").trim() || "AGENTS.md"),
     clone_status: "error",
     clone_error: "",
     note: repo.note,
   };
-
-  if (!remote) {
-    return { ...base, clone_error: "missing remote_url" };
-  }
 
   const env = buildGitBotEnv();
   try {
@@ -217,8 +238,10 @@ async function ensureOneRepo(opts: {
           clone_error: `路径已存在但不是 git 仓库: ${local}`,
         };
       }
-      ensureOriginSsh(local);
-      const fetchNote = await softFetch(local, env);
+      if (remote) ensureOriginSsh(local);
+      const fetchNote = remote
+        ? await softFetch(local, env)
+        : "local checkout (no remote sync)";
       const agentsMd = ensureAgentsMdForLocal({
         projectId,
         projectName,
@@ -230,7 +253,18 @@ async function ensureOneRepo(opts: {
         agents_md_path: agentsMd,
         clone_status: "ready",
         clone_error: "",
-        note: [repo.note, fetchNote].filter(Boolean).join("; "),
+        note: [repo.note, fetchNote, configuredLocal ? "reuse local_path" : ""]
+          .filter(Boolean)
+          .join("; "),
+      };
+    }
+
+    if (!remote) {
+      return {
+        ...base,
+        clone_error: configuredLocal
+          ? `本地路径不存在: ${local}（请确认 Bridge 机器上已 clone）`
+          : "缺少 remote_url，且未提供可用的 local_path",
       };
     }
 

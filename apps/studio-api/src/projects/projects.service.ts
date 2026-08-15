@@ -107,10 +107,9 @@ export class ProjectsService implements OnModuleInit {
     return {
       ...project,
       clone_root,
-      repos: project.repos.map((r) => ({
-        ...r,
-        local_path: this.resolveRepoLocalPath(project, r),
-      })),
+      // Keep configured repo.local_path as stored (empty = default layout).
+      // Callers that need absolute paths use resolveRepoLocalPath().
+      repos: project.repos.map((r) => ({ ...r })),
     };
   }
 
@@ -313,7 +312,9 @@ export class ProjectsService implements OnModuleInit {
       try {
         if (fs.existsSync(local)) {
           if (fs.existsSync(path.join(local, ".git"))) {
-            ensureLocalOriginSsh(local, gitOverrides);
+            if ((repo.remote_url || "").trim()) {
+              ensureLocalOriginSsh(local, gitOverrides);
+            }
             this.ensureAgentsMdForLocal(project, repo, local);
             project.repos[idx] = {
               ...project.repos[idx],
@@ -329,9 +330,16 @@ export class ProjectsService implements OnModuleInit {
           );
         }
 
+        const remote = (repo.remote_url || "").trim();
+        if (!remote) {
+          throw new Error(
+            `本地路径不存在: ${local}。请填写已 clone 的目录，或提供 remote_url 以便克隆`,
+          );
+        }
+
         fs.mkdirSync(path.dirname(local), { recursive: true });
         const branch = repo.default_branch || "main";
-        const cloneUrl = resolveCloneRemoteUrl(repo.remote_url, gitOverrides);
+        const cloneUrl = resolveCloneRemoteUrl(remote, gitOverrides);
         const gitEnv = studioGitEnv(gitOverrides);
         await execFileAsync(
           "git",
@@ -446,10 +454,14 @@ Auto-generated for Studio project \`${project.id}\` / repo \`${repo.id}\`.
   }
 
   async catalogForManager(userId: string | null, projectId: string) {
-    const project =
+    const raw =
       userId == null
-        ? await this.getById(projectId)
-        : await this.getForUser(userId, projectId);
+        ? await this.getRaw(projectId)
+        : await this.assertCanAccessProject(userId, projectId);
+    const project = this.withResolvedPaths(raw);
+    const storedById = new Map(
+      (raw.repos || []).map((r) => [r.id, (r.local_path || "").trim()] as const),
+    );
     return {
       project_id: project.id,
       project_name: project.name,
@@ -458,8 +470,11 @@ Auto-generated for Studio project \`${project.id}\` / repo \`${repo.id}\`.
         id: r.id,
         name: r.name,
         role: r.role,
-        remote_url: r.remote_url,
+        remote_url: r.remote_url || "",
         local_path: this.resolveRepoLocalPath(project, r),
+        /** Path as saved in the project (empty = Bridge default layout). */
+        configured_local_path: storedById.get(r.id) || "",
+        agents_md: r.agents_md || "AGENTS.md",
         agents_md_path: this.resolveAgentsMdPath(project, r),
         clone_status: r.clone_status,
         default_branch: r.default_branch,

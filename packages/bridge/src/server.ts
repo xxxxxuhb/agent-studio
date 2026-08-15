@@ -196,14 +196,29 @@ export function createBridgeApp() {
         project_name: z.string().optional(),
         repos: z
           .array(
-            z.object({
-              id: z.string().min(1),
-              remote_url: z.string().min(1),
-              name: z.string().optional(),
-              role: z.string().optional(),
-              default_branch: z.string().optional(),
-              note: z.string().optional(),
-            }),
+            z
+              .object({
+                id: z.string().min(1),
+                remote_url: z.string().optional().default(""),
+                local_path: z.string().optional().default(""),
+                name: z.string().optional(),
+                role: z.string().optional(),
+                default_branch: z.string().optional(),
+                note: z.string().optional(),
+                agents_md: z.string().optional(),
+              })
+              .superRefine((repo, ctx) => {
+                if (
+                  !(repo.remote_url || "").trim() &&
+                  !(repo.local_path || "").trim()
+                ) {
+                  ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: "remote_url or local_path is required",
+                    path: ["remote_url"],
+                  });
+                }
+              }),
           )
           .min(1),
       })

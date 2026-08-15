@@ -29,6 +29,8 @@ type CatalogRepo = {
   role: string;
   remote_url: string;
   local_path: string;
+  configured_local_path?: string;
+  agents_md?: string;
   agents_md_path: string;
   clone_status?: string;
   default_branch?: string;
@@ -59,11 +61,13 @@ export async function ensureWorkspaceViaBridge(
     projectName?: string;
     repos: Array<{
       id: string;
-      remote_url: string;
+      remote_url?: string;
+      local_path?: string;
       name?: string;
       role?: string;
       default_branch?: string;
       note?: string;
+      agents_md?: string;
     }>;
   },
 ): Promise<BridgeWorkspaceRepo[]> {
@@ -77,11 +81,13 @@ export async function ensureWorkspaceViaBridge(
         project_name: projectName,
         repos: repos.map((r) => ({
           id: r.id,
-          remote_url: r.remote_url,
+          remote_url: r.remote_url || "",
+          local_path: (r.local_path || "").trim() || undefined,
           name: r.name,
           role: r.role,
           default_branch: r.default_branch,
           note: r.note,
+          agents_md: r.agents_md,
         })),
       }),
       signal: AbortSignal.timeout(180_000),
@@ -175,10 +181,13 @@ export async function prepareProjectRouting(
     repos: catalog.repos.map((r) => ({
       id: r.id,
       remote_url: r.remote_url,
+      // Prefer user-configured path so Bridge can reuse an existing checkout.
+      local_path: r.configured_local_path || undefined,
       name: r.name,
       role: r.role,
       default_branch: r.default_branch,
       note: r.note,
+      agents_md: r.agents_md,
     })),
   });
 

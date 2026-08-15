@@ -7,6 +7,7 @@ import {
   Input,
   List,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -47,6 +48,8 @@ type EditorValues = {
   repos: Array<{
     id: string;
     name: string;
+    /** Form-only: clone from remote vs reuse local checkout. */
+    source?: "remote" | "local";
     remote_url: string;
     local_path?: string;
     role: ProjectRepoRole;
@@ -138,6 +141,7 @@ export function ProjectsPage() {
         {
           id: "",
           name: "",
+          source: "remote",
           remote_url: "",
           local_path: "",
           role: "unknown",
@@ -160,16 +164,21 @@ export function ProjectsPage() {
       clone_root: project.clone_root,
       enabled: project.enabled,
       tags: project.tags,
-      repos: project.repos.map((r) => ({
-        id: r.id,
-        name: r.name,
-        remote_url: r.remote_url,
-        local_path: r.local_path,
-        role: r.role,
-        agents_md: r.agents_md,
-        default_branch: r.default_branch,
-        note: r.note,
-      })),
+      repos: project.repos.map((r) => {
+        const local = (r.local_path || "").trim();
+        const remote = (r.remote_url || "").trim();
+        return {
+          id: r.id,
+          name: r.name,
+          source: (local ? "local" : "remote") as "local" | "remote",
+          remote_url: remote,
+          local_path: local,
+          role: r.role,
+          agents_md: r.agents_md,
+          default_branch: r.default_branch,
+          note: r.note,
+        };
+      }),
     });
     setEditorOpen(true);
   }
@@ -177,16 +186,31 @@ export function ProjectsPage() {
   async function saveEditor() {
     try {
       const values = await form.validateFields();
-      const repos = (values.repos || []).map((r) => ({
-        id: r.id.trim(),
-        name: r.name.trim(),
-        remote_url: r.remote_url.trim(),
-        local_path: (r.local_path || "").trim(),
-        role: r.role || "unknown",
-        agents_md: (r.agents_md || "AGENTS.md").trim() || "AGENTS.md",
-        default_branch: (r.default_branch || "main").trim() || "main",
-        note: (r.note || "").trim(),
-      }));
+      const repos = (values.repos || []).map((r) => {
+        const source = r.source === "local" ? "local" : "remote";
+        const local_path = (r.local_path || "").trim();
+        const remote_url = (r.remote_url || "").trim();
+        if (source === "local" && !local_path) {
+          throw new Error(
+            `仓库 ${r.id || r.name || "?"}：本地模式必须填写本地路径`,
+          );
+        }
+        if (source === "remote" && !remote_url) {
+          throw new Error(
+            `仓库 ${r.id || r.name || "?"}：克隆模式必须填写 Git remote URL`,
+          );
+        }
+        return {
+          id: r.id.trim(),
+          name: r.name.trim(),
+          remote_url,
+          local_path: source === "local" ? local_path : local_path,
+          role: r.role || "unknown",
+          agents_md: (r.agents_md || "AGENTS.md").trim() || "AGENTS.md",
+          default_branch: (r.default_branch || "main").trim() || "main",
+          note: (r.note || "").trim(),
+        };
+      });
       const payload: ProjectCreate = {
         id: values.id.trim(),
         team_id: values.team_id,
@@ -372,8 +396,9 @@ export function ProjectsPage() {
                   <Typography.Text code>
                     {defaultCloneRoot || "~/AgentStudio"}/{`{project.id}`}
                   </Typography.Text>
-                  ；已存在且含 .git 的目录会跳过 clone。默认不在本仓库内：macOS/Linux 为
-                  ~/AgentStudio（Finder：用户 → 账号 → AgentStudio），Windows 为 C:\.agent-studio。
+                  ；配置了「本地已有仓库」时直接复用该目录（须含 .git）。默认不在本仓库内：macOS/Linux 为
+                  ~/AgentStudio，Windows 为 C:\.agent-studio。流水线在 Bridge
+                  执行机上解析路径。
                 </Typography.Text>
                 <Table<ProjectRepo>
                   size="small"
@@ -384,6 +409,16 @@ export function ProjectsPage() {
                     { title: "ID", dataIndex: "id", width: 120 },
                     { title: "名称", dataIndex: "name" },
                     { title: "角色", dataIndex: "role", width: 100 },
+                    {
+                      title: "来源",
+                      width: 90,
+                      render: (_: unknown, r: ProjectRepo) =>
+                        (r.local_path || "").trim() ? (
+                          <Tag color="purple">本地</Tag>
+                        ) : (
+                          <Tag>远程</Tag>
+                        ),
+                    },
                     {
                       title: "状态",
                       dataIndex: "clone_status",
@@ -396,11 +431,15 @@ export function ProjectsPage() {
                       title: "remote",
                       dataIndex: "remote_url",
                       ellipsis: true,
+                      render: (v: string) => v || "—",
                     },
                     {
                       title: "local",
                       dataIndex: "local_path",
                       ellipsis: true,
+                      render: (v: string, r: ProjectRepo) =>
+                        (v || "").trim() ||
+                        `${selected.clone_root}/${r.id}`,
                     },
                   ]}
                   expandable={{
@@ -567,21 +606,103 @@ export function ProjectsPage() {
                       <Col span={24}>
                         <Form.Item
                           {...field}
-                          name={[field.name, "remote_url"]}
-                          label="Git remote URL"
-                          rules={[{ required: true }]}
+                          name={[field.name, "source"]}
+                          label="仓库来源"
+                          initialValue="remote"
+                          tooltip="本地模式：填写 Bridge 执行机上已 clone 的绝对路径，流水线跳过 git clone"
                         >
-                          <Input placeholder="git@github.com:org/repo.git" />
+                          <Radio.Group
+                            optionType="button"
+                            buttonStyle="solid"
+                            options={[
+                              { value: "remote", label: "从 remote 克隆" },
+                              { value: "local", label: "使用已有本地目录" },
+                            ]}
+                          />
                         </Form.Item>
                       </Col>
-                      <Col span={12}>
+                      <Col span={24}>
                         <Form.Item
-                          {...field}
-                          name={[field.name, "local_path"]}
-                          label="本地路径（可选）"
-                          tooltip="留空 → {clone_root}/{repo.id}"
+                          noStyle
+                          shouldUpdate={(prev, next) =>
+                            prev?.repos?.[field.name]?.source !==
+                            next?.repos?.[field.name]?.source
+                          }
                         >
-                          <Input placeholder="相对 clone_root 或绝对路径" />
+                          {() => {
+                            const source =
+                              form.getFieldValue([
+                                "repos",
+                                field.name,
+                                "source",
+                              ]) || "remote";
+                            const isLocal = source === "local";
+                            return (
+                              <Row gutter={12}>
+                                <Col span={24}>
+                                  <Form.Item
+                                    name={[field.name, "remote_url"]}
+                                    label={
+                                      isLocal
+                                        ? "Git remote URL（可选）"
+                                        : "Git remote URL"
+                                    }
+                                    rules={
+                                      isLocal
+                                        ? []
+                                        : [
+                                            {
+                                              required: true,
+                                              message: "请填写 remote URL",
+                                            },
+                                          ]
+                                    }
+                                    tooltip={
+                                      isLocal
+                                        ? "可选；留空则只复用本地目录，不主动 fetch"
+                                        : undefined
+                                    }
+                                  >
+                                    <Input placeholder="git@github.com:org/repo.git" />
+                                  </Form.Item>
+                                </Col>
+                                <Col span={24}>
+                                  <Form.Item
+                                    name={[field.name, "local_path"]}
+                                    label={
+                                      isLocal
+                                        ? "本地仓库路径"
+                                        : "本地路径（可选）"
+                                    }
+                                    rules={
+                                      isLocal
+                                        ? [
+                                            {
+                                              required: true,
+                                              message:
+                                                "请填写已 clone 的本地绝对路径",
+                                            },
+                                          ]
+                                        : []
+                                    }
+                                    tooltip={
+                                      isLocal
+                                        ? "须在 Bridge 执行机上存在且含 .git，例如 D:\\code\\my-app"
+                                        : "留空 → {clone_root}/{repo.id}"
+                                    }
+                                  >
+                                    <Input
+                                      placeholder={
+                                        isLocal
+                                          ? "D:\\code\\my-app 或 /home/dev/my-app"
+                                          : "相对 clone_root 或绝对路径"
+                                      }
+                                    />
+                                  </Form.Item>
+                                </Col>
+                              </Row>
+                            );
+                          }}
                         </Form.Item>
                       </Col>
                       <Col span={6}>
@@ -615,7 +736,9 @@ export function ProjectsPage() {
                     add({
                       id: "",
                       name: "",
+                      source: "remote",
                       remote_url: "",
+                      local_path: "",
                       role: "unknown",
                       agents_md: "AGENTS.md",
                       default_branch: "main",

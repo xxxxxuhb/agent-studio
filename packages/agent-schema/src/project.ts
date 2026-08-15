@@ -18,16 +18,20 @@ export const ProjectRepoCloneStatusSchema = z.enum([
 ]);
 export type ProjectRepoCloneStatus = z.infer<typeof ProjectRepoCloneStatusSchema>;
 
-export const ProjectRepoSchema = z.object({
+export const ProjectRepoObjectSchema = z.object({
   id: z
     .string()
     .regex(/^[a-z][a-z0-9_-]*$/, "repo id must be snake_case"),
   name: z.string().min(1),
-  /** git remote URL (https / ssh) */
-  remote_url: z.string().min(1),
   /**
-   * Absolute or project-relative local path after clone.
+   * git remote URL (https / ssh). Optional when `local_path` points at an
+   * already-cloned checkout (Bridge / Studio will skip clone if `.git` exists).
+   */
+  remote_url: z.string().optional().default(""),
+  /**
+   * Absolute or project-relative local path after clone / for existing checkout.
    * Empty → {clone_root}/{repo.id}
+   * Absolute path on the Bridge host reuses that directory for pipeline runs.
    */
   local_path: z.string().optional().default(""),
   role: ProjectRepoRoleSchema.default("unknown"),
@@ -39,15 +43,32 @@ export const ProjectRepoSchema = z.object({
   clone_error: z.string().optional().default(""),
   last_synced_at: z.string().optional(),
 });
+
+function refineRepoSource<T extends { remote_url?: string; local_path?: string }>(
+  repo: T,
+  ctx: z.RefinementCtx,
+) {
+  if (!(repo.remote_url || "").trim() && !(repo.local_path || "").trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "remote_url 或 local_path 至少填写一个",
+      path: ["remote_url"],
+    });
+  }
+}
+
+export const ProjectRepoSchema = ProjectRepoObjectSchema.superRefine(refineRepoSource);
 export type ProjectRepo = z.infer<typeof ProjectRepoSchema>;
 
-export const ProjectRepoCreateSchema = ProjectRepoSchema.omit({
+export const ProjectRepoCreateSchema = ProjectRepoObjectSchema.omit({
   clone_status: true,
   clone_error: true,
   last_synced_at: true,
-}).extend({
-  clone_status: ProjectRepoCloneStatusSchema.optional(),
-});
+})
+  .extend({
+    clone_status: ProjectRepoCloneStatusSchema.optional(),
+  })
+  .superRefine(refineRepoSource);
 export type ProjectRepoCreate = z.infer<typeof ProjectRepoCreateSchema>;
 
 export const ProjectSchema = z.object({
