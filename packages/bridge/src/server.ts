@@ -24,6 +24,10 @@ import {
   bridgeReposRoot,
   ensureWorkspaceOnBridge,
 } from "./workspaceEnsure.js";
+import {
+  listWorkspaceTree,
+  readWorkspaceFile,
+} from "./workspaceBrowse.js";
 
 export type StartBridgeOptions = {
   port?: number;
@@ -213,6 +217,51 @@ export function createBridgeApp() {
         protectedRunIds,
       }),
     );
+  });
+
+  const parseWorkspaceQuery = (raw: unknown) => {
+    const q = (raw || {}) as Record<string, unknown>;
+    return {
+      project_id: String(q.project_id || ""),
+      repo_id: String(q.repo_id || ""),
+      path: String(q.path || ""),
+      local_path: String(q.local_path || ""),
+    };
+  };
+
+  const sendWorkspaceError = (
+    reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+    err: unknown,
+  ) => {
+    const message = err instanceof Error ? err.message : String(err);
+    const statusCode =
+      err && typeof err === "object" && "statusCode" in err
+        ? Number((err as { statusCode?: number }).statusCode) || 500
+        : /not found/i.test(message)
+          ? 404
+          : /path|required|ignored|relative|directory|file/i.test(message)
+            ? 400
+            : 500;
+    return reply.code(statusCode).send({
+      error: statusCode === 404 ? "not_found" : "bad_request",
+      message,
+    });
+  };
+
+  app.get("/workspace/tree", async (req, reply) => {
+    try {
+      return listWorkspaceTree(parseWorkspaceQuery(req.query));
+    } catch (err) {
+      return sendWorkspaceError(reply, err);
+    }
+  });
+
+  app.get("/workspace/file", async (req, reply) => {
+    try {
+      return readWorkspaceFile(parseWorkspaceQuery(req.query));
+    } catch (err) {
+      return sendWorkspaceError(reply, err);
+    }
   });
 
   app.post("/workspace/ensure", async (req) => {

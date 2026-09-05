@@ -700,6 +700,7 @@ export {
 
 export {
   ProjectSchema,
+  ProjectRecordSchema,
   ProjectCreateSchema,
   ProjectUpdateSchema,
   ProjectRepoSchema,
@@ -709,6 +710,7 @@ export {
   isAbsoluteRepoLocalPath,
   projectNeedsPreferredBridge,
   type Project,
+  type ProjectRecord,
   type ProjectCreate,
   type ProjectUpdate,
   type ProjectRepo,

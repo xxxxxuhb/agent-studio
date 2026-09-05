@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import {
   Button,
   Card,
   Col,
+  Drawer,
   Form,
   Input,
   List,
@@ -11,6 +12,7 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tag,
@@ -19,6 +21,7 @@ import {
 } from "antd";
 import {
   CloudDownloadOutlined,
+  CodeOutlined,
   FolderOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -39,6 +42,12 @@ import { bridgesApi } from "../api/bridges";
 import { projectsApi } from "../api/projects";
 import { getSelectedTeam } from "../auth/session";
 import { EmptyRich, EmptyRichActionButton } from "../components/EmptyRich";
+
+const WorkspaceCodePanel = lazy(async () => {
+  await import("../monacoSetup");
+  const m = await import("../components/WorkspaceCodePanel");
+  return { default: m.WorkspaceCodePanel };
+});
 
 type EditorValues = {
   id: string;
@@ -90,6 +99,7 @@ export function ProjectsPage() {
   const [cloning, setCloning] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [codeOpen, setCodeOpen] = useState(false);
   const [bridges, setBridges] = useState<BridgeExecutor[]>([]);
   const [form] = Form.useForm<EditorValues>();
   const reposWatch = Form.useWatch("repos", form);
@@ -374,6 +384,12 @@ export function ProjectsPage() {
             extra={
               selected ? (
                 <Space>
+                  <Button
+                    icon={<CodeOutlined />}
+                    onClick={() => setCodeOpen(true)}
+                  >
+                    查看代码
+                  </Button>
                   <Button
                     icon={<CloudDownloadOutlined />}
                     loading={cloning}
@@ -821,6 +837,27 @@ export function ProjectsPage() {
           </Form.List>
         </Form>
       </Modal>
+
+      <Drawer
+        title="查看代码"
+        open={codeOpen && Boolean(selected)}
+        onClose={() => setCodeOpen(false)}
+        width="min(1100px, 92vw)"
+        destroyOnHidden
+        className="workspace-code-drawer"
+        styles={{ body: { height: "calc(100% - 55px)" } }}
+      >
+        {selected ? (
+          <Suspense fallback={<Spin />}>
+            <WorkspaceCodePanel
+              kind="project"
+              id={selected.id}
+              defaultBridgeId={selected.preferred_bridge_id || undefined}
+              bridges={bridges}
+            />
+          </Suspense>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

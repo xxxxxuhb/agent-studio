@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import {
   Button,
   Card,
   Col,
   Collapse,
+  Drawer,
   Form,
   Input,
   List,
@@ -11,12 +12,14 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Switch,
   Tag,
   Typography,
   message,
 } from "antd";
 import {
+  CodeOutlined,
   DeleteOutlined,
   EditOutlined,
   FileTextOutlined,
@@ -44,6 +47,12 @@ import { WorkOrderAttachments } from "../components/WorkOrderAttachments";
 import { WorkOrderRunPanel } from "../components/WorkOrderRunPanel";
 import { STATUS_LABEL, CATEGORY_LABEL, CATEGORY_OPTIONS } from "../work-orders/workOrderLabels";
 import { subscribeWorkOrder } from "../ws/work-orders";
+
+const WorkspaceCodePanel = lazy(async () => {
+  await import("../monacoSetup");
+  const m = await import("../components/WorkspaceCodePanel");
+  return { default: m.WorkspaceCodePanel };
+});
 
 function genId() {
   return `wo-${Date.now().toString(36)}`;
@@ -75,6 +84,7 @@ export function WorkOrdersPage() {
   const [liveStatus, setLiveStatus] = useState<
     "connecting" | "connected" | "disconnected" | "idle"
   >("idle");
+  const [codeOpen, setCodeOpen] = useState(false);
   const [form] = Form.useForm<WorkOrderCreate>();
   const watchedProjectId = Form.useWatch("project_id", form);
 
@@ -497,6 +507,12 @@ export function WorkOrdersPage() {
             extra={
               selected ? (
                 <Space wrap>
+                  <Button
+                    icon={<CodeOutlined />}
+                    onClick={() => setCodeOpen(true)}
+                  >
+                    查看代码
+                  </Button>
                   {selected.status === "draft" ||
                   selected.status === "queued" ||
                   selected.status === "completed" ||
@@ -955,6 +971,36 @@ export function WorkOrdersPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Drawer
+        title="查看代码"
+        open={codeOpen && Boolean(selected)}
+        onClose={() => setCodeOpen(false)}
+        width="min(1100px, 92vw)"
+        destroyOnHidden
+        className="workspace-code-drawer"
+        styles={{ body: { height: "calc(100% - 55px)" } }}
+      >
+        {selected ? (
+          <Suspense fallback={<Spin />}>
+            <WorkspaceCodePanel
+              kind="work-order"
+              id={selected.id}
+              defaultRepoId={
+                selected.run?.repo_targets?.[
+                  selected.run.current_repo_index ?? 0
+                ]?.repo_id
+              }
+              defaultBridgeId={
+                selected.run?.studio?.bridge_id ||
+                selected.preferred_bridge_id ||
+                undefined
+              }
+              bridges={bridges}
+            />
+          </Suspense>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

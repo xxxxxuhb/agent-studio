@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   isAbsoluteRepoLocalPath,
   projectNeedsPreferredBridge,
+  ProjectRecordSchema,
   ProjectSchema,
 } from "@agent-studio/agent-schema";
 
@@ -51,5 +52,22 @@ describe("project local path + preferred bridge", () => {
       ],
     });
     assert.equal(ok.preferred_bridge_id, "bridge-1");
+  });
+
+  it("stored records still parse without preferred_bridge_id", () => {
+    const row = ProjectRecordSchema.parse({
+      id: "demo",
+      team_id: "t1",
+      name: "Demo",
+      repos: [
+        {
+          id: "api",
+          name: "API",
+          local_path: "/data/repos/api",
+          remote_url: "",
+        },
+      ],
+    });
+    assert.equal(row.preferred_bridge_id, "");
   });
 });

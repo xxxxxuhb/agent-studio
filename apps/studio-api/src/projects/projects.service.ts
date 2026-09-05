@@ -14,6 +14,7 @@ import { promisify } from "node:util";
 import { In, Repository } from "typeorm";
 import {
   ProjectCreateSchema,
+  ProjectRecordSchema,
   ProjectRepoSchema,
   ProjectSchema,
   ProjectUpdateSchema,
@@ -66,7 +67,7 @@ export class ProjectsService implements OnModuleInit {
   }
 
   private toProject(entity: ProjectEntity): Project {
-    return ProjectSchema.parse({
+    return ProjectRecordSchema.parse({
       id: entity.id,
       team_id: entity.team_id,
       name: entity.name,

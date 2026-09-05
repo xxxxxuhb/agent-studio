@@ -132,6 +132,9 @@ function refinePreferredBridgeForLocalRepos<
   }
 }
 
+export const ProjectRecordSchema = ProjectObjectSchema;
+export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
+
 export const ProjectSchema = ProjectObjectSchema.superRefine(
   refinePreferredBridgeForLocalRepos,
 );

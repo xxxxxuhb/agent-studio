@@ -24,7 +24,7 @@
     "dev": "tsx watch src/bin.ts start",
     "start": "tsx src/bin.ts start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/commit-record.test.js dist/http-auth.test.js dist/workspace-ensure.test.js dist/busy-admit.test.js dist/gc.test.js dist/artifacts.test.js"
+    "test": "npm run build && node --test dist/commit-record.test.js dist/http-auth.test.js dist/workspace-ensure.test.js dist/workspace-browse.test.js dist/busy-admit.test.js dist/gc.test.js dist/artifacts.test.js"
   },
   "engines": {
     "node": ">=20"

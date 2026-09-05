@@ -35,3 +35,14 @@ export {
   resolveBridgeRepoPath,
   resolveBridgeRepoLocalPath,
 } from "./workspaceEnsure.js";
+export {
+  listWorkspaceTree,
+  readWorkspaceFile,
+  normalizeRelPath,
+  resolveBrowseRoot,
+  MAX_WORKSPACE_FILE_BYTES,
+  WORKSPACE_SKIP_DIRS,
+  type WorkspaceTreeEntry,
+  type WorkspaceTreeResult,
+  type WorkspaceFileResult,
+} from "./workspaceBrowse.js";

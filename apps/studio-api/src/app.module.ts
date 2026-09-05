@@ -15,6 +15,7 @@ import { TriggersModule } from "./triggers/triggers.module";
 import { UsageModule } from "./usage/usage.module";
 import { AuditModule } from "./audit/audit.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { WorkspaceModule } from "./workspace/workspace.module";
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { NotificationsModule } from "./notifications/notifications.module";
     TriggersModule,
     UsageModule,
     AuditModule,
+    WorkspaceModule,
   ],
   controllers: [HealthController],
 })
